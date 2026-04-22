@@ -92,8 +92,4 @@ YouTube 下載: 若遇到下載失敗，請執行 python -m pip install -U yt-dl
 
 YouTube Extraction: If extraction fails, run python -m pip install -U yt-dlp to update.
 
-隱私安全性: 本專案自動忽略 cookies.txt，確保您的個人憑證不會上傳。
-
-Security: cookies.txt is automatically ignored to ensure your credentials are never uploaded.
-
 Built with by Rossi Huang
