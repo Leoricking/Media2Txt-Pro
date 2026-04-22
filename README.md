@@ -1,4 +1,3 @@
-Markdown
 # 🚀 Media2Txt Pro
 
 [**繁體中文**](#-繁體中文) | [**English**](#-english)
@@ -31,6 +30,7 @@ pip install -r requirements.txt
 
 # 2. 啟動程式
 python main.py
+` ` `
 🇺🇸 English
 Media to Structured Knowledge — Effortlessly transform YouTube videos or local media into precise transcripts and AI-powered summaries.
 
@@ -59,14 +59,16 @@ Node.js: 🟢 Official LTS Release (Required for yt-dlp)
 FFmpeg: 🎞️ Download Builds (Ensure bin folder is added to your PATH)
 
 🚀 Quick Start
-Bash
+` ` `
 # 1. Install dependencies
 pip install -r requirements.txt
 
 # 2. Run application
 python main.py
+` ` `
+
 📂 專案結構 / Structure
-Plaintext
+` ` `
 media2txt/
 ├─ main.py            # 程式啟動入口 / Entry point
 ├─ requirements.txt   # 依賴清單 / Dependencies
@@ -77,6 +79,7 @@ media2txt/
 │  └─ summarizer.py   # AI 摘要 / LLM Summarizer
 └─ ui/                # 介面組件 / UI components
    └─ main_window.py  # 主視窗邏輯 / Main GUI logic
+` ` `
 🧾 輸出成果 / Output
 處理完成後，結果將自動儲存於 knowledge/ 資料夾：
 
