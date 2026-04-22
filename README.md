@@ -29,3 +29,65 @@ pip install -r requirements.txt
 
 # 啟動程式
 python main.py
+
+🇺🇸 English
+Media to Structured Knowledge — Effortlessly transform YouTube videos or local media into precise transcripts and AI-powered summaries.
+
+✨ Key Features
+🎬 Universal Transcription: Supports YouTube URLs and local files (MP4, MP3, WAV, WebM).
+
+📊 Batch Queuing: Process multiple URLs and files in a single automated session.
+
+🧠 AI Summarization: Built-in Ollama integration for local, private AI content analysis.
+
+🌐 Multilingual Output: Choose between Traditional Chinese or English for your summaries.
+
+⚡ Hardware Acceleration: Full NVIDIA GPU (CUDA) support for lightning-fast processing.
+
+🖥️ User-Friendly GUI: Clean desktop interface designed for everyone.
+
+⚙️ Prerequisites
+Please install the following components before running the application:
+
+Python 3.11+: Official Download
+
+Ollama (AI Summary): Official Download (Run ollama pull mistral after install)
+
+Node.js: Official LTS Release (Required for yt-dlp)
+
+FFmpeg: Download Builds (Ensure bin folder is added to your PATH)
+
+🚀 Quick Start
+# Install dependencies
+pip install -r requirements.txt
+
+# Run application
+python main.py
+
+📂 專案結構 / Structure
+Plaintext
+media2txt/
+├─ main.py            # 程式啟動入口 / Entry point
+├─ requirements.txt   # 依賴清單 / Dependencies
+├─ build.bat          # 一鍵封裝 EXE / Build script
+├─ pipeline/          # 核心邏輯 / Core processing logic
+│  ├─ downloader.py   # 影音下載 / Media Downloader
+│  ├─ transcriber.py  # 語音轉文字 / Whisper Transcriber
+│  └─ summarizer.py   # AI 摘要 / LLM Summarizer
+└─ ui/                # 介面組件 / UI components
+   └─ main_window.py  # 主視窗邏輯 / Main GUI logic
+🧾 輸出成果 / Output
+處理完成後，結果將自動儲存於 knowledge/ 資料夾：
+
+.txt: 包含逐字稿與結構化 AI 摘要 / Contains transcript and structured AI summary.
+
+.vtt / .srt: 原始字幕檔案 / Original subtitle files.
+
+⚠️ 注意事項 / Notes
+YouTube 下載: 若遇到下載失敗，請執行 python -m pip install -U yt-dlp 更新下載核心。
+
+YouTube Extraction: If extraction fails, run python -m pip install -U yt-dlp to update.
+
+隱私安全性: 本專案自動忽略 cookies.txt，確保您的個人憑證不會上傳。
+
+Security: cookies.txt is automatically ignored to ensure your credentials are never uploaded.
