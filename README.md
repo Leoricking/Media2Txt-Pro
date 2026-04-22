@@ -1,3 +1,4 @@
+Markdown
 # 🚀 Media2Txt Pro
 
 [**繁體中文**](#-繁體中文) | [**English**](#-english)
@@ -17,19 +18,19 @@
 * **🖥️ 直覺介面**：專為桌面端設計的 GUI，無需程式背景即可上手。
 
 ### ⚙️ 環境準備 (必需組件)
-1. **Python 3.11+**: [官方下載](https://www.python.org/downloads/)
-2. **Ollama (AI 摘要)**: [官方下載](https://ollama.com/) (安裝後請執行 `ollama pull mistral`)
-3. **Node.js**: [官方 LTS 版本](https://nodejs.org/) (yt-dlp 運作必需)
-4. **FFmpeg**: [官方下載](https://ffmpeg.org/download.html) (請確保將 `bin` 路徑加入環境變數)
+請依序完成以下「一鍵下載」安裝，以確保程式運作：
+1. **Python 3.11+**: [🐍 點此下載官方安裝檔](https://www.python.org/downloads/)
+2. **Ollama (AI 摘要)**: [🧠 點此下載 Ollama](https://ollama.com/download) (安裝後請執行 `ollama pull mistral`)
+3. **Node.js**: [🟢 點此下載 LTS 版本](https://nodejs.org/) (yt-dlp 運作必需)
+4. **FFmpeg**: [🎞️ 點此下載 Windows 版本](https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-full.7z) (解壓後請將 `bin` 路徑加入環境變數)
 
 ### 🚀 快速開始
 ```bash
-# 安裝依賴套件
+# 1. 安裝依賴套件
 pip install -r requirements.txt
 
-# 啟動程式
+# 2. 啟動程式
 python main.py
-
 🇺🇸 English
 Media to Structured Knowledge — Effortlessly transform YouTube videos or local media into precise transcripts and AI-powered summaries.
 
@@ -49,21 +50,21 @@ Media to Structured Knowledge — Effortlessly transform YouTube videos or local
 ⚙️ Prerequisites
 Please install the following components before running the application:
 
-Python 3.11+: Official Download
+Python 3.11+: 🐍 Official Download
 
-Ollama (AI Summary): Official Download (Run ollama pull mistral after install)
+Ollama (AI Summary): 🧠 Official Download (Run ollama pull mistral after install)
 
-Node.js: Official LTS Release (Required for yt-dlp)
+Node.js: 🟢 Official LTS Release (Required for yt-dlp)
 
-FFmpeg: Download Builds (Ensure bin folder is added to your PATH)
+FFmpeg: 🎞️ Download Builds (Ensure bin folder is added to your PATH)
 
 🚀 Quick Start
-# Install dependencies
+Bash
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# Run application
+# 2. Run application
 python main.py
-
 📂 專案結構 / Structure
 Plaintext
 media2txt/
@@ -91,3 +92,5 @@ YouTube Extraction: If extraction fails, run python -m pip install -U yt-dlp to 
 隱私安全性: 本專案自動忽略 cookies.txt，確保您的個人憑證不會上傳。
 
 Security: cookies.txt is automatically ignored to ensure your credentials are never uploaded.
+
+Built with by Rossi Huang
