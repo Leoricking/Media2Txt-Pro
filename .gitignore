@@ -1,0 +1,30 @@
+# Python 相關
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虛擬環境
+.venv/
+venv/
+env/
+
+# 日誌與快取
+logs/
+*.log
+models/
+
+# 運行生成的輸出資料 (這部分最佔空間)
+data/
+knowledge/
+dist/
+build/
+
+# 敏感資訊
+cookies.txt
+.env
+
+# 安裝檔與暫存
+install/
+tree.txt
+*.spec.bak
