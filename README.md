@@ -1,95 +1,50 @@
-# 🚀 Media2Txt Pro
+# Media2Txt Pro Community
 
-[**繁體中文**](#-繁體中文) | [**English**](#-english)
+A desktop community edition for transcribing YouTube/local media and generating structured summaries with local Whisper + Ollama.
 
----
+## Community features
+- Single YouTube URL or multiple URLs
+- Local video/audio batch input
+- Transcript export to `.txt`
+- Summary output in Traditional Chinese or English
+- Basic domain-aware summarizer
+- Local Whisper model support
+- CPU / GPU auto detection with fallback
+- Pause / Resume / Stop
+- GUI debug panel and ETA
 
-## 🇹🇼 繁體中文
+## Requirements
+- Python 3.10+
+- Ollama running locally
+- Local faster-whisper model placed at `models/faster-whisper-large-v3`
 
-> **影音轉結構化知識庫** —— 一鍵將 YouTube 影片或本機影音轉化為精確的逐字稿與 AI 摘要。
+## Quick start
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Put the model in:
+   ```
+   models/faster-whisper-large-v3
+   ```
+3. Start Ollama and ensure your model is available.
+4. Run:
+   ```bash
+   run.bat
+   ```
 
-### ✨ 核心特色
-* **🎬 全能轉錄**：支援 YouTube 網址與本機多媒體檔案 (MP4, MP3, WAV, WebM)。
-* **📊 批次任務**：支援多個網址與檔案同時處理，自動排隊執行。
-* **🧠 AI 智能摘要**：整合 **Ollama** 本地大模型，自動生成結構化的內容總結。
-* **🌐 多語系支援**：摘要可自由選擇 **繁體中文** 或 英文輸出。
-* **⚡ 效能優化**：支援 NVIDIA GPU 加速 (CUDA)，大幅提升轉錄速度。
-* **🖥️ 直覺介面**：專為桌面端設計的 GUI，無需程式背景即可上手。
+## Notes
+- Community edition intentionally keeps only the basic summarization workflow.
+- Advanced expert templates, report export, history, automation, and commercial support belong in the Pro edition.
 
-### ⚙️ 環境準備 (必需組件)
-請依序完成以下「一鍵下載」安裝，以確保程式運作：
-1. **Python 3.11+**: [🐍 點此下載官方安裝檔](https://www.python.org/downloads/)
-2. **Ollama (AI 摘要)**: [🧠 點此下載 Ollama](https://ollama.com/download) (安裝後請執行 `ollama pull mistral`)
-3. **Node.js**: [🟢 點此下載 LTS 版本](https://nodejs.org/) (yt-dlp 運作必需)
-4. **FFmpeg**: [🎞️ 點此下載 Windows 版本](https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-full.7z) (解壓後請將 `bin` 路徑加入環境變數)
+## Windows CUDA native-crash isolation
 
-### 🚀 快速開始
-```bash
-# 1. 安裝依賴套件
-pip install -r requirements.txt
+Transcription now runs in an isolated child process by default. A native CTranslate2/CUDA access violation such as `0xC0000005` no longer needs to terminate the Qt GUI. The parent process detects the child exit code and retries transcription in a CPU child process.
 
-# 2. 啟動程式
-python main.py
-```
-🇺🇸 English
-Media to Structured Knowledge — Effortlessly transform YouTube videos or local media into precise transcripts and AI-powered summaries.
+Default stability settings:
 
-✨ Key Features
-🎬 Universal Transcription: Supports YouTube URLs and local files (MP4, MP3, WAV, WebM).
-
-📊 Batch Queuing: Process multiple URLs and files in a single automated session.
-
-🧠 AI Summarization: Built-in Ollama integration for local, private AI content analysis.
-
-🌐 Multilingual Output: Choose between Traditional Chinese or English for your summaries.
-
-⚡ Hardware Acceleration: Full NVIDIA GPU (CUDA) support for lightning-fast processing.
-
-🖥️ User-Friendly GUI: Clean desktop interface designed for everyone.
-
-⚙️ Prerequisites
-Please install the following components before running the application:
-
-Python 3.11+: 🐍 Official Download
-
-Ollama (AI Summary): 🧠 Official Download (Run ollama pull mistral after install)
-
-Node.js: 🟢 Official LTS Release (Required for yt-dlp)
-
-FFmpeg: 🎞️ Download Builds (Ensure bin folder is added to your PATH)
-
-🚀 Quick Start
-```
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Run application
-python main.py
-```
-
-📂 專案結構 / Structure
-```
-media2txt/
-├─ main.py            # 程式啟動入口 / Entry point
-├─ requirements.txt   # 依賴清單 / Dependencies
-├─ build.bat          # 一鍵封裝 EXE / Build script
-├─ pipeline/          # 核心邏輯 / Core processing logic
-│  ├─ downloader.py   # 影音下載 / Media Downloader
-│  ├─ transcriber.py  # 語音轉文字 / Whisper Transcriber
-│  └─ summarizer.py   # AI 摘要 / LLM Summarizer
-└─ ui/                # 介面組件 / UI components
-   └─ main_window.py  # 主視窗邏輯 / Main GUI logic
-```
-🧾 輸出成果 / Output
-處理完成後，結果將自動儲存於 knowledge/ 資料夾：
-
-.txt: 包含逐字稿與結構化 AI 摘要 / Contains transcript and structured AI summary.
-
-.vtt / .srt: 原始字幕檔案 / Original subtitle files.
-
-⚠️ 注意事項 / Notes
-YouTube 下載: 若遇到下載失敗，請執行 python -m pip install -U yt-dlp 更新下載核心。
-
-YouTube Extraction: If extraction fails, run python -m pip install -U yt-dlp to update.
-
-Built with by Rossi Huang
+- GPU compute type: `int8_float16`
+- CPU compute type: `int8`
+- Long-video threshold: 15 minutes
+- Very-long-video threshold: 40 minutes
+- Subprocess isolation: enabled

@@ -1,118 +1,41 @@
-Media2Txt Pro 安裝說明
-========================
+Media2Txt Pro Community - Install Guide
 
-這一版支援：
-1. YouTube 連結批次轉文字
-2. 本機影片 / 音訊檔批次轉文字
-3. Transcript + Summary 輸出
-4. Summary 可切換中文（繁體）或英文
+1. Install Python 3.10 or newer
+2. Install requirements:
+   pip install -r requirements.txt
+3. Install Ollama and make sure it is running locally
+4. Download a faster-whisper model and place it under:
+   models\faster-whisper-large-v3
+5. Optional but recommended:
+   install ffmpeg and add it to PATH
+6. Run:
+   run.bat
 
-----------------------------------------
-一、必要安裝
-----------------------------------------
+Home PC (no .venv):
+- run.bat will use system python
+- GPU will be attempted first if available
 
-1. 安裝 Python 3.11 或 3.12
-建議安裝 64 位元版本。
+Company PC (.venv):
+- if .venv\Scripts\python.exe exists, run.bat will use it automatically
+- use run_cpu.bat if you want to force CPU
 
-2. 安裝 Node.js
-用途：
-- 提供 yt-dlp 的 JavaScript runtime
-- 提升 YouTube 擷取穩定性
+Low resource mode:
+- use run_low_resource.bat
 
-建議：
-- 安裝 LTS 版本
-- 安裝後重新開啟 PowerShell / CMD
-- 驗證：
-  node -v
+Windows GPU 穩定性設定
+------------------------
+run.bat 會自動設定：
+  MEDIA2TXT_TRANSCRIBE_SUBPROCESS=1
+  MEDIA2TXT_GPU_COMPUTE_TYPE=int8_float16
+  MEDIA2TXT_CPU_COMPUTE_TYPE=int8
+  MEDIA2TXT_LONG_VIDEO_MINUTES=15
+  MEDIA2TXT_VERY_LONG_VIDEO_MINUTES=40
 
-3. 安裝 Ollama
-用途：
-- 產生 Summary
+這些設定可避免 faster-whisper / CTranslate2 發生 native crash 時連主 UI 一起關閉。
+如果 GPU 子程序發生 EXIT_CODE=-1073741819 (0xC0000005)，主程式會自動改用 CPU 子程序重試。
 
-安裝後請先執行：
-  ollama run mistral
+若要手動恢復 float16（不建議 RTX 3060 長影片批次）：
+  set MEDIA2TXT_GPU_COMPUTE_TYPE=float16
 
-驗證：
-  ollama --version
-
-4. （建議）安裝 ffmpeg
-用途：
-- 修正部份音訊時間戳問題
-- 提升媒體處理穩定性
-
-安裝後驗證：
-  ffmpeg -version
-
-----------------------------------------
-二、安裝 Python 套件
-----------------------------------------
-
-在專案目錄執行：
-
-  python -m pip install --upgrade pip
-  pip install -r requirements.txt
-
-----------------------------------------
-三、啟動方式
-----------------------------------------
-
-在專案目錄執行：
-
-  python main.py
-
-----------------------------------------
-四、YouTube 使用注意事項
-----------------------------------------
-
-1. 若某些影片抓不到內容，請先確認：
-- 已安裝 Node.js
-- 已更新 yt-dlp
-- 必要時放置 cookies.txt 於專案根目錄
-
-2. cookies.txt
-- 不是每支影片都一定需要
-- 若遇到受限影片、年齡限制、登入限制，可放入：
-  cookies.txt
-  到專案根目錄
-
-3. 這一版會優先嘗試：
-- YouTube 手動字幕
-- YouTube 自動字幕
-- 若沒有字幕才 fallback 到 Whisper
-
-----------------------------------------
-五、本機檔案支援格式
-----------------------------------------
-
-影片：
-- .mp4
-- .mkv
-- .mov
-- .avi
-- .webm
-
-音訊：
-- .mp3
-- .wav
-- .m4a
-- .flac
-- .aac
-- .ogg
-
-----------------------------------------
-六、輸出位置
-----------------------------------------
-
-執行後輸出會存到：
-
-  knowledge/
-
-----------------------------------------
-七、打包成 EXE
-----------------------------------------
-
-直接執行：
-
-  build.bat
-
-若專案中有 Media2Txt.spec，會優先使用該 spec 打包。
+若要停用子程序隔離（不建議）：
+  set MEDIA2TXT_TRANSCRIBE_SUBPROCESS=0

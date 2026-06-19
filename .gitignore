@@ -1,62 +1,46 @@
-# =========================
-# Python
-# =========================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Virtual environment
 .venv/
 venv/
 env/
-
-# =========================
-# Logs / cache
-# =========================
-logs/
-*.log
-
-# =========================
-# Models (非常大)
-# =========================
-models/
-
-# =========================
-# Runtime data / outputs
-# =========================
-data/
-knowledge/
-
-# =========================
-# Build / packaging
-# =========================
 build/
 dist/
-*.spec.bak
-
-# =========================
-# Sensitive / local config
-# =========================
-cookies.txt
-.env
-
-# =========================
-# Installer / binaries
-# =========================
+logs/
+data/
+knowledge/
+models/
 install/
-*.msi
-*.exe
+*.log
+cookies.txt
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.aac
+*.ogg
+*.vtt
+.env
+.env.*
 
-# =========================
-# Temp / misc
-# =========================
+# Local backups and manual test inputs
+old/
+youtube test url.txt
 tree.txt
 
-# =========================
 # IDE / OS
-# =========================
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Build artifacts
+*.exe
+*.msi
+*.spec.bak

@@ -1,7 +1,10 @@
 import os
 import locale
+import time
+import re
+from datetime import datetime
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, QTimer
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, QTimer, Qt
 from PySide6.QtGui import QTextCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget,
@@ -16,10 +19,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QApplication,
     QComboBox,
+    QSizePolicy,
+    QSplitter,
+    QCheckBox,
 )
 
 from pipeline.cleaner import clean_summary, clean_transcript, looks_too_short, to_traditional_chinese
 from pipeline.ffmpeg_utils import get_ffmpeg_info
+from pipeline.exporter import build_export_payload, export_by_extension
 
 
 def detect_system_language() -> str:
@@ -32,210 +39,287 @@ def detect_system_language() -> str:
         lang = os.environ.get("LANG", "")
 
     lang = (lang or "").lower()
-
     if "zh" in lang:
         return "zh"
     return "en"
+
+
+def detect_whisper_environment():
+    info = {
+        "faster_whisper_installed": False,
+        "ctranslate2_installed": False,
+        "models_found": [],
+        "preferred_model_dir": "",
+        "offline_mode": os.environ.get("MEDIA2TXT_OFFLINE", "0") == "1",
+        "error": "",
+        "cuda_ready": False,
+        "cuda_reason": "",
+    }
+
+    try:
+        import faster_whisper  # noqa: F401
+        info["faster_whisper_installed"] = True
+    except Exception as e:
+        info["error"] = str(e)
+
+    try:
+        import ctranslate2  # noqa: F401
+        info["ctranslate2_installed"] = True
+    except Exception:
+        pass
+
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    candidates = [
+        os.environ.get("WHISPER_MODEL_DIR", "").strip(),
+        os.path.join(base_dir, "models", "faster-whisper-large-v3"),
+        os.path.join("models", "faster-whisper-large-v3"),
+        os.path.join(base_dir, "models", "faster-whisper-medium"),
+        os.path.join(base_dir, "models", "faster-whisper-small"),
+    ]
+
+    checked = []
+    required_files = [
+        "model.bin",
+        "config.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "vocabulary.json",
+    ]
+
+    for path in candidates:
+        if not path:
+            continue
+        norm = os.path.abspath(path)
+        if norm in checked:
+            continue
+        checked.append(norm)
+
+        if os.path.isdir(norm):
+            if all(os.path.exists(os.path.join(norm, name)) for name in required_files):
+                info["models_found"].append(norm)
+
+    if info["models_found"]:
+        info["preferred_model_dir"] = info["models_found"][0]
+
+    try:
+        from pipeline.transcriber import can_use_cuda_for_transcribe
+        ready, cuda_info = can_use_cuda_for_transcribe()
+        info["cuda_ready"] = ready
+        info["cuda_reason"] = cuda_info.get("reason", "")
+    except Exception as e:
+        info["cuda_ready"] = False
+        info["cuda_reason"] = str(e)
+
+    return info
 
 
 class UIStrings:
     def __init__(self):
         self.lang = detect_system_language()
 
-        if self.lang == "zh":
-            self.window_title = "Media2Txt Pro"
-            self.env_title = "環境狀態"
-            self.input_title = "YouTube 連結（每行一個）"
-            self.local_files_title = "本機影片 / 音訊檔（可批次上傳）"
-            self.progress_title = "進度"
-            self.result_title = "結果"
-            self.summary_lang_title = "Summary 語言"
+        self.window_title = "Media2Txt Pro Community"
+        self.env_title = "Environment"
+        self.input_title = "YouTube URLs (one per line)"
+        self.local_files_title = "Local Video / Audio Files (batch supported)"
+        self.progress_title = "Progress"
+        self.result_title = "Results"
+        self.summary_lang_title = "Summary Language"
+        self.debug_title = "Debug Status"
 
-            self.start = "開始"
-            self.stop = "停止"
-            self.add_files = "加入本機影片 / 音訊"
-            self.clear_files = "清空本機清單"
-            self.save = "另存新檔"
-            self.copy = "一鍵複製"
-            self.open_folder = "開啟輸出資料夾"
+        self.start = "Start"
+        self.pause = "Pause"
+        self.resume = "Resume"
+        self.stop = "Stop"
+        self.add_files = "Add Local Video / Audio"
+        self.clear_files = "Clear Local List"
+        self.save = "Save As"
+        self.copy = "Copy"
+        self.open_folder = "Open Output Folder"
+        self.clear_debug = "Clear Debug Log"
+        self.show_debug = "Show Debug Panel"
 
-            self.placeholder = "https://youtube.com/...\nhttps://youtube.com/...\n..."
-            self.idle = "待命"
-            self.preparing = "準備中..."
-            self.please_input = "請先輸入 YouTube 連結，或加入本機影片 / 音訊檔"
-            self.stopping = "停止中..."
-            self.stopped = "已停止"
-            self.done = "全部完成"
+        self.placeholder = "https://youtube.com/...\nhttps://youtube.com/...\n..."
+        self.idle = "Idle"
+        self.preparing = "Preparing..."
+        self.please_input = "Please enter at least one YouTube URL or add local media files"
+        self.pausing = "Pausing..."
+        self.paused = "Paused"
+        self.resuming = "Resuming..."
+        self.stopping = "Stopping..."
+        self.stopped = "Stopped"
+        self.done = "All completed"
+        self.done_with_error = "Finished with error"
 
-            self.downloading = "下載中"
-            self.transcribing = "轉錄中"
-            self.summarizing = "摘要中"
+        self.downloading = "Downloading"
+        self.transcribing = "Transcribing"
+        self.summarizing = "Summarizing"
 
-            self.transcript = "原文 transcript"
-            self.summary = "摘要 summary"
-            self.saved_to = "已儲存到"
-            self.video_title = "影片標題"
-            self.video_url = "影片連結"
-            self.transcript_source = "Transcript 來源"
-            self.media_source = "媒體來源"
+        self.transcript = "Transcript"
+        self.summary = "Summary"
+        self.saved_to = "Saved to"
+        self.video_url = "Video URL"
+        self.transcript_source = "Transcript Source"
+        self.media_source = "Media Source"
 
-            self.no_result = "目前沒有可儲存的結果"
-            self.saved_ok = "已另存新檔"
-            self.copy_ok = "結果已複製到剪貼簿"
-            self.open_folder_fail = "無法開啟輸出資料夾"
-            self.save_dialog_title = "另存結果"
-            self.save_filter = "Text Files (*.txt);;All Files (*.*)"
-            self.error = "錯誤"
+        self.no_result = "There is no result to save"
+        self.saved_ok = "File saved"
+        self.copy_ok = "Copied to clipboard"
+        self.open_folder_fail = "Cannot open output folder"
+        self.save_dialog_title = "Save Result"
+        self.save_filter = (
+            "Text Files (*.txt);;"
+            "Markdown Files (*.md);;"
+            "JSON Files (*.json);;"
+            "Word Documents (*.docx);;"
+            "All Files (*.*)"
+        )
+        self.error = "Error"
 
-            self.ffmpeg_found = "已偵測到 ffmpeg"
-            self.ffmpeg_missing = "未安裝 ffmpeg，音訊時間戳修正與部份轉檔最佳化將不可用"
-            self.ffmpeg_path = "ffmpeg 路徑"
+        self.ffmpeg_found = "ffmpeg detected"
+        self.ffmpeg_missing = "ffmpeg is not installed. Timestamp fixing and some conversion optimizations will be unavailable"
+        self.ffmpeg_path = "ffmpeg path"
 
-            self.ready_for_new_input = "可貼上新的 YouTube 連結"
+        self.env_checking = "Checking environment..."
+        self.ready_for_new_input = "Ready for new YouTube URLs"
 
-            self.source_manual_sub = "YouTube 手動字幕"
-            self.source_auto_sub = "YouTube 自動字幕"
-            self.source_whisper = "Whisper 語音辨識"
-            self.source_whisper_music = "Whisper 語音辨識（音樂模式）"
+        self.source_manual_sub = "YouTube manual subtitles"
+        self.source_auto_sub = "YouTube auto subtitles"
+        self.source_whisper = "Whisper speech recognition"
+        self.source_whisper_music = "Whisper speech recognition (music mode)"
 
-            self.source_youtube = "YouTube URL"
-            self.source_local = "本機檔案"
+        self.source_youtube = "YouTube URL"
+        self.source_local = "Local file"
 
-            self.low_confidence_note = "注意：此影片未取得字幕，且屬音樂/歌詞類內容，Whisper 文字稿可能不完整。"
+        self.low_confidence_note = "Note: No subtitles were found for this music/lyric video, so the Whisper transcript may be incomplete."
 
-            self.local_file_count = "已加入本機檔案數"
-            self.file_dialog_title = "選擇影片 / 音訊檔"
-            self.file_dialog_filter = (
-                "Media Files (*.mp4 *.mkv *.mov *.avi *.webm *.mp3 *.wav *.m4a *.flac *.aac *.ogg);;"
-                "Video Files (*.mp4 *.mkv *.mov *.avi *.webm);;"
-                "Audio Files (*.mp3 *.wav *.m4a *.flac *.aac *.ogg);;"
-                "All Files (*.*)"
+        self.local_file_count = "Local files added"
+        self.file_dialog_title = "Select video / audio files"
+        self.file_dialog_filter = (
+            "Media Files (*.mp4 *.mkv *.mov *.avi *.webm *.mp3 *.wav *.m4a *.flac *.aac *.ogg);;"
+            "Video Files (*.mp4 *.mkv *.mov *.avi *.webm);;"
+            "Audio Files (*.mp3 *.wav *.m4a *.flac *.aac *.ogg);;"
+            "All Files (*.*)"
+        )
+
+        self.summary_lang_zh = "Chinese (Traditional)"
+        self.summary_lang_en = "English"
+
+    def build_transcribe_error_message(self, raw_message: str) -> str:
+        msg = (raw_message or "").strip()
+        lower = msg.lower()
+
+        if "no module named 'faster_whisper'" in lower:
+            return (
+                "Missing faster-whisper package.\n\nPlease run:\npip install -r requirements.txt\n\n"
+                f"Original error:\n{msg}"
             )
 
-            self.summary_lang_zh = "中文（繁體）"
-            self.summary_lang_en = "英文"
-        else:
-            self.window_title = "Media2Txt Pro"
-            self.env_title = "Environment"
-            self.input_title = "YouTube URLs (one per line)"
-            self.local_files_title = "Local Video / Audio Files (batch supported)"
-            self.progress_title = "Progress"
-            self.result_title = "Results"
-            self.summary_lang_title = "Summary Language"
-
-            self.start = "Start"
-            self.stop = "Stop"
-            self.add_files = "Add Local Video / Audio"
-            self.clear_files = "Clear Local List"
-            self.save = "Save As"
-            self.copy = "Copy"
-            self.open_folder = "Open Output Folder"
-
-            self.placeholder = "https://youtube.com/...\nhttps://youtube.com/...\n..."
-            self.idle = "Idle"
-            self.preparing = "Preparing..."
-            self.please_input = "Please enter at least one YouTube URL or add local media files"
-            self.stopping = "Stopping..."
-            self.stopped = "Stopped"
-            self.done = "All completed"
-
-            self.downloading = "Downloading"
-            self.transcribing = "Transcribing"
-            self.summarizing = "Summarizing"
-
-            self.transcript = "Transcript"
-            self.summary = "Summary"
-            self.saved_to = "Saved to"
-            self.video_title = "Video Title"
-            self.video_url = "Video URL"
-            self.transcript_source = "Transcript Source"
-            self.media_source = "Media Source"
-
-            self.no_result = "There is no result to save"
-            self.saved_ok = "File saved"
-            self.copy_ok = "Copied to clipboard"
-            self.open_folder_fail = "Cannot open output folder"
-            self.save_dialog_title = "Save Result"
-            self.save_filter = "Text Files (*.txt);;All Files (*.*)"
-            self.error = "Error"
-
-            self.ffmpeg_found = "ffmpeg detected"
-            self.ffmpeg_missing = "ffmpeg is not installed. Timestamp fixing and some conversion optimizations will be unavailable"
-            self.ffmpeg_path = "ffmpeg path"
-
-            self.ready_for_new_input = "Ready for new YouTube URLs"
-
-            self.source_manual_sub = "YouTube manual subtitles"
-            self.source_auto_sub = "YouTube auto subtitles"
-            self.source_whisper = "Whisper speech recognition"
-            self.source_whisper_music = "Whisper speech recognition (music mode)"
-
-            self.source_youtube = "YouTube URL"
-            self.source_local = "Local file"
-
-            self.low_confidence_note = "Note: No subtitles were found for this music/lyric video, so the Whisper transcript may be incomplete."
-
-            self.local_file_count = "Local files added"
-            self.file_dialog_title = "Select video / audio files"
-            self.file_dialog_filter = (
-                "Media Files (*.mp4 *.mkv *.mov *.avi *.webm *.mp3 *.wav *.m4a *.flac *.aac *.ogg);;"
-                "Video Files (*.mp4 *.mkv *.mov *.avi *.webm);;"
-                "Audio Files (*.mp3 *.wav *.m4a *.flac *.aac *.ogg);;"
-                "All Files (*.*)"
+        if "certificate_verify_failed" in lower or "self-signed certificate" in lower:
+            return (
+                "Whisper model download failed due to SSL certificate verification issues.\n\n"
+                "Recommended actions:\n1. Use a local model\n2. Set WHISPER_MODEL_DIR\n3. Enable offline mode with MEDIA2TXT_OFFLINE=1\n\n"
+                f"Original error:\n{msg}"
             )
 
-            self.summary_lang_zh = "Chinese (Traditional)"
-            self.summary_lang_en = "English"
+        return msg
 
 
 class WorkerSignals(QObject):
     progress = Signal(int)
     status = Signal(str)
     result = Signal(str)
-    finished = Signal()
+    finished = Signal(bool)
+    failed = Signal(str)
+    debug = Signal(str)
+
+
+class EnvironmentCheckSignals(QObject):
+    finished = Signal(dict)
     failed = Signal(str)
 
 
-class Worker(QRunnable):
-    def __init__(self, tasks, stop_flag, ui_strings: UIStrings, summary_language: str):
+class EnvironmentCheckWorker(QRunnable):
+    def __init__(self):
         super().__init__()
-        self.tasks = tasks
-        self.stop_flag = stop_flag
-        self.s = ui_strings
-        self.summary_language = summary_language
-        self.signals = WorkerSignals()
+        self.signals = EnvironmentCheckSignals()
 
     def run(self):
         try:
+            ffmpeg_info = get_ffmpeg_info()
+            whisper_info = detect_whisper_environment()
+            self.signals.finished.emit({
+                "ffmpeg_info": ffmpeg_info,
+                "whisper_info": whisper_info,
+            })
+        except Exception as e:
+            self.signals.failed.emit(str(e))
+
+
+class Worker(QRunnable):
+    def __init__(self, tasks, control_flag, ui_strings: UIStrings, summary_language: str):
+        super().__init__()
+        self.tasks = tasks
+        self.control_flag = control_flag
+        self.s = ui_strings
+        self.summary_language = summary_language
+        self.signals = WorkerSignals()
+        self.had_error = False
+
+    def dbg(self, text: str):
+        print(text)
+        self.signals.debug.emit(text)
+
+    def is_stopped(self):
+        return bool(self.control_flag.get("stop"))
+
+    def wait_if_paused(self, status_text: str = ""):
+        while self.control_flag.get("pause") and not self.is_stopped():
+            if status_text:
+                self.signals.status.emit(status_text)
+            time.sleep(0.15)
+
+    def run(self):
+        try:
+            self.dbg("START WORKER RUN")
+
             from pipeline.downloader import download_audio, process_local_media
-            from pipeline.transcriber import transcribe
+            from pipeline.transcriber import transcribe, get_transcriber_runtime_info
             from pipeline.summarizer import summarize
             from pipeline.knowledge import save_note
 
+            runtime_info = get_transcriber_runtime_info()
+            self.dbg(f"TRANSCRIBER RUNTIME: {runtime_info}")
+
             total = len(self.tasks)
+            self.dbg(f"TASK TOTAL: {total}")
 
             for i, task in enumerate(self.tasks):
-                if self.stop_flag.get("stop"):
-                    self.signals.status.emit(f"🛑 {self.s.stopped}")
-                    self.signals.finished.emit()
+                if self.is_stopped():
+                    self.signals.status.emit(self.s.stopped)
+                    self.dbg("WORKER STOPPED BY USER")
+                    self.signals.finished.emit(False)
                     return
 
+                self.wait_if_paused(self.s.paused)
+
                 task_type = task["type"]
+                self.dbg(f"PROCESS TASK {i+1}/{total} TYPE={task_type}")
 
                 if task_type == "youtube":
                     url = task["value"]
-
                     self.signals.progress.emit(0)
                     self.signals.status.emit(f"[{i+1}/{total}] {self.s.downloading}")
-                    media_info = download_audio(url, self.signals.progress.emit, self.stop_flag)
-
+                    self.dbg(f"DOWNLOAD YOUTUBE: {url}")
+                    media_info = download_audio(url, self.signals.progress.emit, self.control_flag)
                     media_source = self.s.source_youtube
                     media_ref = url
 
                 elif task_type == "local":
                     local_path = task["value"]
+                    self.signals.progress.emit(0)
+                    self.signals.status.emit(f"[{i+1}/{total}] {self.s.transcribing}")
+                    self.dbg(f"PROCESS LOCAL FILE: {local_path}")
                     media_info = process_local_media(local_path)
-
                     media_source = self.s.source_local
                     media_ref = local_path
 
@@ -249,43 +333,58 @@ class Worker(QRunnable):
                 subtitle_source = media_info.get("subtitle_source", "") or ""
                 is_music_like = media_info.get("is_music_like", False)
 
-                if self.stop_flag.get("stop"):
-                    self.signals.status.emit(f"🛑 {self.s.stopped}")
-                    self.signals.finished.emit()
+                self.dbg(f"TITLE: {video_title}")
+                self.dbg(f"AUDIO PATH: {audio_path}")
+                self.dbg(f"HAS SUBTITLE: {'YES' if subtitle_text.strip() else 'NO'}")
+                self.dbg(f"IS MUSIC LIKE: {is_music_like}")
+
+                if self.is_stopped():
+                    self.signals.status.emit(self.s.stopped)
+                    self.dbg("WORKER STOPPED BEFORE TRANSCRIBE")
+                    self.signals.finished.emit(False)
                     return
+
+                self.wait_if_paused(self.s.paused)
 
                 transcript = ""
                 transcript_source = ""
 
                 if subtitle_text.strip():
-                    transcript = clean_transcript(subtitle_text)
-                    if subtitle_source == "manual":
-                        transcript_source = self.s.source_manual_sub
-                    else:
-                        transcript_source = self.s.source_auto_sub
+                    transcript = clean_transcript(subtitle_text, force_traditional=(self.summary_language == "zh"))
+                    transcript_source = self.s.source_manual_sub if subtitle_source == "manual" else self.s.source_auto_sub
+                    self.dbg(f"USE SUBTITLE SOURCE: {transcript_source}")
+                    self.signals.progress.emit(65)
                 else:
                     self.signals.progress.emit(0)
                     self.signals.status.emit(f"[{i+1}/{total}] {self.s.transcribing}")
+                    self.dbg("CALL transcribe()")
                     transcript = transcribe(
-                        audio_path,
-                        self.signals.progress.emit,
-                        self.stop_flag,
+                        audio_path=audio_path,
+                        progress_callback=self.signals.progress.emit,
+                        stop_flag=self.control_flag,
                         is_music_like=is_music_like,
+                        debug_callback=self.dbg,
                     )
-                    transcript = clean_transcript(transcript)
+                    transcript = clean_transcript(transcript, force_traditional=(self.summary_language == "zh"))
                     transcript_source = self.s.source_whisper_music if is_music_like else self.s.source_whisper
+                    self.dbg(f"TRANSCRIBE DONE, SOURCE: {transcript_source}")
 
                 low_confidence_warning = ""
                 if is_music_like and not subtitle_text.strip() and looks_too_short(transcript):
                     low_confidence_warning = self.s.low_confidence_note
+                    self.dbg("LOW CONFIDENCE WARNING TRIGGERED")
 
-                if self.stop_flag.get("stop"):
-                    self.signals.status.emit(f"🛑 {self.s.stopped}")
-                    self.signals.finished.emit()
+                if self.is_stopped():
+                    self.signals.status.emit(self.s.stopped)
+                    self.dbg("WORKER STOPPED BEFORE SUMMARY")
+                    self.signals.finished.emit(False)
                     return
 
-                self.signals.progress.emit(0)
+                self.wait_if_paused(self.s.paused)
+
+                self.signals.progress.emit(85)
                 self.signals.status.emit(f"[{i+1}/{total}] {self.s.summarizing}")
+                self.dbg("CALL summarize()")
 
                 summary_input = transcript
                 if low_confidence_warning:
@@ -297,13 +396,22 @@ class Worker(QRunnable):
                     transcript_source=transcript_source,
                     media_source=media_source,
                     summary_language=self.summary_language,
-                    stop_flag=self.stop_flag,
+                    stop_flag=self.control_flag,
                 )
+                summary = clean_summary(summary, summary_language=self.summary_language)
+                self.dbg("SUMMARY DONE")
 
-                if self.summary_language == "zh":
-                    summary = clean_summary(summary)
-                else:
-                    summary = summary.strip()
+                metadata = {
+                    "title": video_title,
+                    "video_id": video_id,
+                    "media_source": media_source,
+                    "media_ref": media_ref,
+                    "transcript_source": transcript_source,
+                    "subtitle_source": subtitle_source,
+                    "summary_language": self.summary_language,
+                    "is_music_like": is_music_like,
+                    "generated_at": datetime.now().isoformat(timespec="seconds"),
+                }
 
                 final_text = (
                     f"=== {video_title} ===\n\n"
@@ -322,20 +430,31 @@ class Worker(QRunnable):
                     f"{summary}\n"
                 )
 
-                saved_path = save_note(video_title, final_text, video_id=video_id)
+                saved_path = save_note(
+                    title=video_title,
+                    content=final_text,
+                    video_id=video_id,
+                    metadata=metadata,
+                    transcript=transcript,
+                    summary=summary,
+                )
+                self.dbg(f"SAVED TO: {saved_path}")
                 final_text += f"\n[{self.s.saved_to}] {saved_path}\n"
 
                 self.signals.result.emit(final_text)
 
             self.signals.progress.emit(100)
-            self.signals.status.emit(f"✅ {self.s.done}")
-            self.signals.finished.emit()
+            self.signals.status.emit(self.s.done)
+            self.dbg("WORKER FINISHED SUCCESS")
+            self.signals.finished.emit(True)
 
         except Exception as e:
+            self.had_error = True
             msg = str(e)
+            self.dbg(f"WORKER ERROR: {msg}")
             self.signals.status.emit(f"❌ {msg}")
             self.signals.failed.emit(msg)
-            self.signals.finished.emit()
+            self.signals.finished.emit(False)
 
 
 class SectionCard(QFrame):
@@ -343,9 +462,9 @@ class SectionCard(QFrame):
         super().__init__(parent)
         self.setObjectName("sectionCard")
 
-        self.layout_main = QVBoxLayout()
-        self.layout_main.setContentsMargins(14, 12, 14, 14)
-        self.layout_main.setSpacing(10)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 14)
+        outer.setSpacing(10)
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("sectionTitle")
@@ -354,9 +473,8 @@ class SectionCard(QFrame):
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(8)
 
-        self.layout_main.addWidget(self.title_label)
-        self.layout_main.addLayout(self.content_layout)
-        self.setLayout(self.layout_main)
+        outer.addWidget(self.title_label)
+        outer.addLayout(self.content_layout)
 
     def addWidget(self, widget):
         self.content_layout.addWidget(widget)
@@ -366,53 +484,73 @@ class SectionCard(QFrame):
 
 
 class MainWindow(QWidget):
+    TASK_PREFIX_RE = re.compile(r"^\[(\d+)/(\d+)\]\s*(.+?)\s*$")
+
     def __init__(self):
         super().__init__()
 
         self.ui = UIStrings()
         self.last_result_text = ""
+        self.last_export_payload = None
         self.current_worker = None
         self.is_running = False
         self.local_files = []
-
-        self.resize(860, 800)
-        self.setMinimumSize(640, 600)
-
         self.pool = QThreadPool()
-        self.stop_flag = {"stop": False}
+        self.control_flag = {"stop": False, "pause": False}
+        self.env_check_running = False
+
+        self.task_start_ts = None
+        self.last_progress_value = 0
+        self.eta_timer = QTimer()
+        self.eta_timer.timeout.connect(self.update_eta_display)
+        self.last_run_had_error = False
+
+        self.current_task_index = None
+        self.current_task_total = None
+        self.current_stage_name = ""
+        self.current_status_text = self.ui.idle
+
+        self.setMinimumSize(1100, 760)
+        self.resize(1450, 900)
 
         self._build_ui()
-        self._bind_shortcuts()
-        QTimer.singleShot(0, self._after_ui_ready)
+        QTimer.singleShot(50, self._after_ui_ready)
 
     def _build_ui(self):
         self.setWindowTitle(self.ui.window_title)
 
-        root = QVBoxLayout()
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(12)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
 
         self.env_card = SectionCard(self.ui.env_title)
-        self.ffmpeg_label = QLabel("")
+        self.ffmpeg_label = QLabel(self.ui.env_checking)
         self.ffmpeg_label.setWordWrap(True)
         self.ffmpeg_label.setObjectName("envLabel")
         self.env_card.addWidget(self.ffmpeg_label)
+        root.addWidget(self.env_card)
+
+        splitter = QSplitter(Qt.Horizontal)
+
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
 
         self.input_card = SectionCard(self.ui.input_title)
         self.input = QTextEdit()
         self.input.setPlaceholderText(self.ui.placeholder)
-        self.input.setMinimumHeight(100)
-        self.input.setMaximumHeight(140)
+        self.input.setMinimumHeight(120)
         self.input.setAcceptRichText(False)
         self.input_card.addWidget(self.input)
 
         self.local_card = SectionCard(self.ui.local_files_title)
-
         local_tools = QHBoxLayout()
+
         self.add_files_btn = QPushButton(self.ui.add_files)
         self.clear_files_btn = QPushButton(self.ui.clear_files)
-        self.add_files_btn.setMinimumHeight(38)
-        self.clear_files_btn.setMinimumHeight(38)
+        self.add_files_btn.setMinimumHeight(40)
+        self.clear_files_btn.setMinimumHeight(40)
 
         local_tools.addWidget(self.add_files_btn)
         local_tools.addWidget(self.clear_files_btn)
@@ -422,8 +560,7 @@ class MainWindow(QWidget):
 
         self.local_files_box = QTextEdit()
         self.local_files_box.setReadOnly(True)
-        self.local_files_box.setMinimumHeight(90)
-        self.local_files_box.setMaximumHeight(120)
+        self.local_files_box.setMinimumHeight(160)
 
         self.local_card.addLayout(local_tools)
         self.local_card.addWidget(self.local_files_info)
@@ -431,78 +568,128 @@ class MainWindow(QWidget):
 
         self.summary_lang_card = SectionCard(self.ui.summary_lang_title)
         summary_lang_layout = QHBoxLayout()
-
         self.summary_lang_combo = QComboBox()
         self.summary_lang_combo.addItem(self.ui.summary_lang_zh, "zh")
         self.summary_lang_combo.addItem(self.ui.summary_lang_en, "en")
-        self.summary_lang_combo.setMinimumHeight(36)
-
+        self.summary_lang_combo.setMinimumHeight(38)
         summary_lang_layout.addWidget(self.summary_lang_combo)
         self.summary_lang_card.addLayout(summary_lang_layout)
 
+        action_card = SectionCard("")
         action_layout = QHBoxLayout()
-        action_layout.setSpacing(12)
 
-        self.start_btn = QPushButton(f"🚀 {self.ui.start}")
-        self.stop_btn = QPushButton(f"🛑 {self.ui.stop}")
-        self.start_btn.setMinimumHeight(42)
-        self.stop_btn.setMinimumHeight(42)
+        self.start_btn = QPushButton(self.ui.start)
+        self.pause_btn = QPushButton(self.ui.pause)
+        self.resume_btn = QPushButton(self.ui.resume)
+        self.stop_btn = QPushButton(self.ui.stop)
+
+        self.start_btn.setMinimumHeight(46)
+        self.pause_btn.setMinimumHeight(46)
+        self.resume_btn.setMinimumHeight(46)
+        self.stop_btn.setMinimumHeight(46)
 
         action_layout.addWidget(self.start_btn)
+        action_layout.addWidget(self.pause_btn)
+        action_layout.addWidget(self.resume_btn)
         action_layout.addWidget(self.stop_btn)
+        action_card.addLayout(action_layout)
+
+        debug_card = SectionCard(self.ui.debug_title)
+
+        debug_toolbar = QHBoxLayout()
+        self.show_debug_checkbox = QCheckBox(self.ui.show_debug)
+        self.show_debug_checkbox.setChecked(True)
+        self.clear_debug_btn = QPushButton(self.ui.clear_debug)
+        self.clear_debug_btn.setMinimumHeight(34)
+
+        debug_toolbar.addWidget(self.show_debug_checkbox)
+        debug_toolbar.addStretch(1)
+        debug_toolbar.addWidget(self.clear_debug_btn)
+
+        self.debug_output = QTextEdit()
+        self.debug_output.setReadOnly(True)
+        self.debug_output.setMinimumHeight(180)
+
+        debug_card.addLayout(debug_toolbar)
+        debug_card.addWidget(self.debug_output)
+
+        left_layout.addWidget(self.input_card)
+        left_layout.addWidget(self.local_card)
+        left_layout.addWidget(self.summary_lang_card)
+        left_layout.addWidget(action_card)
+        left_layout.addWidget(debug_card, 1)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
 
         self.progress_card = SectionCard(self.ui.progress_title)
         self.progress = QProgressBar()
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
+        self.progress.setMinimumHeight(30)
 
         self.status = QLabel(self.ui.idle)
         self.status.setObjectName("statusLabel")
+        self.status.setWordWrap(True)
+
+        self.eta_label = QLabel("Elapsed: --:--  |  Remaining: --:--")
+        self.eta_label.setObjectName("envLabel")
+        self.eta_label.setWordWrap(True)
 
         self.progress_card.addWidget(self.progress)
         self.progress_card.addWidget(self.status)
+        self.progress_card.addWidget(self.eta_label)
+
+        self.result_card = SectionCard(self.ui.result_title)
 
         result_tools = QHBoxLayout()
-        result_tools.setSpacing(10)
-
         self.save_btn = QPushButton(self.ui.save)
         self.copy_btn = QPushButton(self.ui.copy)
         self.open_folder_btn = QPushButton(self.ui.open_folder)
 
-        self.save_btn.setMinimumHeight(36)
-        self.copy_btn.setMinimumHeight(36)
-        self.open_folder_btn.setMinimumHeight(36)
+        self.save_btn.setMinimumHeight(38)
+        self.copy_btn.setMinimumHeight(38)
+        self.open_folder_btn.setMinimumHeight(38)
 
         result_tools.addWidget(self.save_btn)
         result_tools.addWidget(self.copy_btn)
         result_tools.addWidget(self.open_folder_btn)
 
-        self.result_card = SectionCard(self.ui.result_title)
-        self.result_card.addLayout(result_tools)
-
         self.output = QTextEdit()
         self.output.setReadOnly(True)
-        self.output.setMinimumHeight(260)
+        self.output.setMinimumHeight(500)
+        self.output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
+        self.result_card.addLayout(result_tools)
         self.result_card.addWidget(self.output)
 
-        root.addWidget(self.env_card)
-        root.addWidget(self.input_card)
-        root.addWidget(self.local_card)
-        root.addWidget(self.summary_lang_card)
-        root.addLayout(action_layout)
-        root.addWidget(self.progress_card)
-        root.addWidget(self.result_card)
+        right_layout.addWidget(self.progress_card)
+        right_layout.addWidget(self.result_card, 1)
 
-        self.setLayout(root)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 5)
+        splitter.setSizes([620, 820])
+
+        root.addWidget(splitter, 1)
 
         self.start_btn.clicked.connect(self.start)
+        self.pause_btn.clicked.connect(self.pause)
+        self.resume_btn.clicked.connect(self.resume)
         self.stop_btn.clicked.connect(self.stop)
         self.save_btn.clicked.connect(self.save_result_as)
         self.copy_btn.clicked.connect(self.copy_result)
         self.open_folder_btn.clicked.connect(self.open_output_folder)
         self.add_files_btn.clicked.connect(self.add_local_files)
         self.clear_files_btn.clicked.connect(self.clear_local_files)
+        self.clear_debug_btn.clicked.connect(self.clear_debug_log)
+        self.show_debug_checkbox.toggled.connect(self.on_toggle_debug_panel)
+
+        self.paste_shortcut = QShortcut(QKeySequence("Ctrl+V"), self)
+        self.paste_shortcut.activated.connect(self.focus_input_for_paste)
 
         self.setStyleSheet("""
             QWidget {
@@ -517,7 +704,7 @@ class MainWindow(QWidget):
             }
 
             QLabel#sectionTitle {
-                font-size: 14px;
+                font-size: 15px;
                 font-weight: 700;
                 color: #20262e;
                 background: transparent;
@@ -547,6 +734,7 @@ class MainWindow(QWidget):
                 border-radius: 8px;
                 padding: 8px 14px;
                 font-weight: 600;
+                min-width: 110px;
             }
 
             QPushButton:hover {
@@ -567,7 +755,6 @@ class MainWindow(QWidget):
                 border-radius: 8px;
                 text-align: center;
                 background-color: #ffffff;
-                min-height: 28px;
             }
 
             QProgressBar::chunk {
@@ -576,26 +763,206 @@ class MainWindow(QWidget):
             }
         """)
 
-    def _bind_shortcuts(self):
-        self.paste_shortcut = QShortcut(QKeySequence("Ctrl+V"), self)
-        self.paste_shortcut.activated.connect(self.focus_input_for_paste)
+    def debug_log(self, text: str):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        line = f"[{timestamp}] {text}"
+        print(line)
+        if self.show_debug_checkbox.isChecked():
+            self.debug_output.append(line)
+            self.debug_output.moveCursor(QTextCursor.End)
+
+    def clear_debug_log(self):
+        self.debug_output.clear()
+
+    def on_toggle_debug_panel(self, checked: bool):
+        self.debug_output.setVisible(checked)
+        self.clear_debug_btn.setVisible(checked)
+
+    def _format_seconds(self, seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        mm, ss = divmod(seconds, 60)
+        hh, mm = divmod(mm, 60)
+        if hh > 0:
+            return f"{hh:02d}:{mm:02d}:{ss:02d}"
+        return f"{mm:02d}:{ss:02d}"
+
+    def current_elapsed_text(self) -> str:
+        if not self.task_start_ts:
+            return "--:--"
+        return self._format_seconds(time.time() - self.task_start_ts)
+
+    def _parse_status_text(self, text: str):
+        text = (text or "").strip()
+        m = self.TASK_PREFIX_RE.match(text)
+        if not m:
+            return None, None, text
+        try:
+            idx = int(m.group(1))
+            total = int(m.group(2))
+        except Exception:
+            idx, total = None, None
+        stage = m.group(3).strip()
+        return idx, total, stage
+
+    def _reset_progress_for_new_scope(self, task_index, task_total, stage_name):
+        self.current_task_index = task_index
+        self.current_task_total = task_total
+        self.current_stage_name = stage_name or ""
+        self.last_progress_value = 0
+        self.progress.setValue(0)
+
+    def on_status_update(self, text: str):
+        self.current_status_text = text
+        self.status.setText(text)
+
+        task_index, task_total, stage_name = self._parse_status_text(text)
+
+        if task_index is None:
+            return
+
+        task_changed = (self.current_task_index != task_index) or (self.current_task_total != task_total)
+        stage_changed = (self.current_stage_name != (stage_name or ""))
+
+        if task_changed:
+            self._reset_progress_for_new_scope(task_index, task_total, stage_name)
+            return
+
+        if stage_changed:
+            self.current_stage_name = stage_name or ""
+
+            stage_lower = (stage_name or "").lower()
+            current_val = self.progress.value()
+
+            if "downloading" in stage_lower:
+                target = 0
+            elif "transcribing" in stage_lower:
+                target = max(current_val, 0)
+            elif "summarizing" in stage_lower:
+                target = max(current_val, 85)
+            else:
+                target = current_val
+
+            self.last_progress_value = max(self.last_progress_value, target)
+            self.progress.setValue(self.last_progress_value)
+
+    def on_progress_update(self, value: int):
+        if not self.is_running:
+            self.progress.setValue(value)
+            self.last_progress_value = value
+            return
+
+        incoming = max(0, min(100, int(value)))
+
+        if incoming < self.last_progress_value:
+            return
+
+        self.last_progress_value = incoming
+        self.progress.setValue(incoming)
+        self.update_eta_display()
+
+    def reset_eta_display(self):
+        self.task_start_ts = None
+        self.last_progress_value = 0
+        self.current_task_index = None
+        self.current_task_total = None
+        self.current_stage_name = ""
+        self.current_status_text = self.ui.idle
+        self.eta_label.setText("Elapsed: --:--  |  Remaining: --:--")
+
+    def update_eta_display(self):
+        if not self.is_running or not self.task_start_ts:
+            return
+
+        elapsed = time.time() - self.task_start_ts
+        progress = max(0, min(100, self.last_progress_value))
+
+        if progress <= 0 or elapsed <= 0:
+            self.eta_label.setText(
+                f"Elapsed: {self._format_seconds(elapsed)}  |  Remaining: --:--"
+            )
+            return
+
+        rate = progress / elapsed
+        if rate <= 0:
+            remaining_text = "--:--"
+        else:
+            remaining = max(0.0, (100 - progress) / rate)
+            remaining_text = self._format_seconds(remaining)
+
+        self.eta_label.setText(
+            f"Elapsed: {self._format_seconds(elapsed)}  |  Remaining: {remaining_text}"
+        )
 
     def _after_ui_ready(self):
-        self.status.setText(self.ui.idle)
-        self.refresh_environment_status()
-        self._set_running_state(False)
+        self.progress.setValue(0)
+        self.output.clear()
+        self.last_result_text = ""
+        self.last_export_payload = None
+        self.control_flag["stop"] = False
+        self.control_flag["pause"] = False
         self.refresh_local_files_display()
+        self._set_running_state(False)
+        self.status.setText(self.ui.idle)
+        self.ffmpeg_label.setText(self.ui.env_checking)
+        self.reset_eta_display()
+        self.debug_log("UI READY")
+        QTimer.singleShot(250, self.start_environment_check)
 
-    def refresh_environment_status(self):
-        ffmpeg_info = get_ffmpeg_info()
+    def start_environment_check(self):
+        if self.env_check_running:
+            return
+
+        self.env_check_running = True
+        self.ffmpeg_label.setText(self.ui.env_checking)
+        self.debug_log("ENVIRONMENT CHECK START")
+
+        worker = EnvironmentCheckWorker()
+        worker.signals.finished.connect(self.on_environment_check_finished)
+        worker.signals.failed.connect(self.on_environment_check_failed)
+        self.pool.start(worker)
+
+    def on_environment_check_finished(self, payload: dict):
+        self.env_check_running = False
+
+        ffmpeg_info = payload["ffmpeg_info"]
+        whisper_info = payload["whisper_info"]
+
+        lines = []
+
         if ffmpeg_info["installed"]:
-            text = (
-                f"✅ {self.ui.ffmpeg_found}\n"
-                f"{self.ui.ffmpeg_path}: {ffmpeg_info['ffmpeg_path']}"
-            )
+            lines.append(f"✅ {self.ui.ffmpeg_found}")
+            lines.append(f"{self.ui.ffmpeg_path}: {ffmpeg_info['ffmpeg_path']}")
         else:
-            text = f"⚠️ {self.ui.ffmpeg_missing}"
-        self.ffmpeg_label.setText(text)
+            lines.append(f"⚠️ {self.ui.ffmpeg_missing}")
+
+        if whisper_info["faster_whisper_installed"]:
+            lines.append("✅ faster-whisper: installed")
+        else:
+            lines.append("❌ faster-whisper: not installed")
+
+        if whisper_info["ctranslate2_installed"]:
+            lines.append("✅ ctranslate2: installed")
+        else:
+            lines.append("⚠️ ctranslate2: not detected or failed")
+
+        if whisper_info["preferred_model_dir"]:
+            lines.append(f"✅ Local model: {whisper_info['preferred_model_dir']}")
+        else:
+            lines.append("⚠️ Local model: not found (transcription may fail if offline)")
+
+        lines.append(f"Offline mode: {'ON' if whisper_info['offline_mode'] else 'OFF'}")
+        lines.append(f"GPU transcribe: {'READY' if whisper_info.get('cuda_ready') else 'FAIL'}")
+
+        if whisper_info.get("cuda_reason"):
+            lines.append(f"GPU detail: {whisper_info['cuda_reason']}")
+
+        self.ffmpeg_label.setText("\n".join(lines))
+        self.debug_log("ENVIRONMENT CHECK DONE")
+
+    def on_environment_check_failed(self, message: str):
+        self.env_check_running = False
+        self.ffmpeg_label.setText(f"⚠️ {message}")
+        self.debug_log(f"ENVIRONMENT CHECK ERROR: {message}")
 
     def refresh_local_files_display(self):
         self.local_files_info.setText(f"{self.ui.local_file_count}: {len(self.local_files)}")
@@ -603,24 +970,21 @@ class MainWindow(QWidget):
 
     def _set_running_state(self, running: bool):
         self.is_running = running
-
         self.start_btn.setEnabled(not running)
+        self.pause_btn.setEnabled(running and not self.control_flag.get("pause"))
+        self.resume_btn.setEnabled(running and self.control_flag.get("pause"))
         self.stop_btn.setEnabled(running)
+
         self.add_files_btn.setEnabled(not running)
         self.clear_files_btn.setEnabled(not running)
         self.summary_lang_combo.setEnabled(not running)
-
         self.input.setReadOnly(running)
-        self.input.setEnabled(True)
-
-        if not running:
-            self.input.setFocus()
-            self.input.activateWindow()
 
     def focus_input_for_paste(self):
         if not self.is_running:
             self.input.setFocus()
             self.input.paste()
+            self.debug_log("PASTE INTO URL INPUT")
 
     def add_local_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -634,16 +998,22 @@ class MainWindow(QWidget):
             return
 
         existing = set(self.local_files)
+        new_count = 0
         for f in files:
             if f not in existing:
                 self.local_files.append(f)
                 existing.add(f)
+                new_count += 1
 
         self.refresh_local_files_display()
+        self.status.setText(self.ui.idle)
+        self.debug_log(f"LOCAL FILES ADDED: {new_count}")
 
     def clear_local_files(self):
         self.local_files = []
         self.refresh_local_files_display()
+        self.status.setText(self.ui.idle)
+        self.debug_log("LOCAL FILE LIST CLEARED")
 
     def build_tasks(self):
         tasks = []
@@ -659,42 +1029,115 @@ class MainWindow(QWidget):
         return tasks
 
     def start(self):
+        self.debug_log("START CLICKED")
+
+        if self.is_running:
+            self.debug_log("START IGNORED: already running")
+            return
+
         tasks = self.build_tasks()
+        self.debug_log(f"TASK COUNT: {len(tasks)}")
+
         if not tasks:
-            self.status.setText(f"❌ {self.ui.please_input}")
+            self.on_status_update(f"❌ {self.ui.please_input}")
+            self.debug_log("NO TASK TO RUN")
             return
 
         self.output.clear()
         self.last_result_text = ""
+        self.last_export_payload = None
         self.progress.setValue(0)
-        self.stop_flag["stop"] = False
-        self.status.setText(self.ui.preparing)
+        self.control_flag["stop"] = False
+        self.control_flag["pause"] = False
+        self.last_run_had_error = False
+        self.on_status_update(self.ui.preparing)
 
         summary_language = self.summary_lang_combo.currentData()
+        self.debug_log(f"SUMMARY LANGUAGE: {summary_language}")
 
-        worker = Worker(tasks, self.stop_flag, self.ui, summary_language)
+        self.task_start_ts = time.time()
+        self.last_progress_value = 0
+        self.current_task_index = None
+        self.current_task_total = None
+        self.current_stage_name = ""
+        self.update_eta_display()
+        self.eta_timer.start(1000)
+
+        worker = Worker(tasks, self.control_flag, self.ui, summary_language)
         self.current_worker = worker
 
-        worker.signals.progress.connect(self.progress.setValue)
-        worker.signals.status.connect(self.status.setText)
+        worker.signals.progress.connect(self.on_progress_update)
+        worker.signals.status.connect(self.on_status_update)
         worker.signals.result.connect(self.append_result)
         worker.signals.finished.connect(self.on_worker_finished)
+        worker.signals.failed.connect(self.on_worker_failed)
+        worker.signals.debug.connect(self.debug_log)
 
         self._set_running_state(True)
         self.pool.start(worker)
 
-    def stop(self):
-        self.stop_flag["stop"] = True
-        self.status.setText(f"🛑 {self.ui.stopping}")
+    def pause(self):
+        if not self.is_running:
+            return
+        if self.control_flag.get("pause"):
+            return
 
-    def on_worker_finished(self):
+        self.control_flag["pause"] = True
+        self.on_status_update(self.ui.pausing)
+        self.debug_log("PAUSE CLICKED")
+        self._set_running_state(True)
+
+    def resume(self):
+        if not self.is_running:
+            return
+        if not self.control_flag.get("pause"):
+            return
+
+        self.control_flag["pause"] = False
+        self.on_status_update(self.ui.resuming)
+        self.debug_log("RESUME CLICKED")
+        self._set_running_state(True)
+
+    def stop(self):
+        if not self.is_running:
+            return
+        self.control_flag["stop"] = True
+        self.control_flag["pause"] = False
+        self.on_status_update(self.ui.stopping)
+        self.eta_timer.stop()
+        self.debug_log("STOP CLICKED")
+        self._set_running_state(True)
+
+    def on_worker_failed(self, message: str):
+        self.last_run_had_error = True
+        self.debug_log(f"WORKER FAILED SIGNAL: {message}")
+        pretty = self.ui.build_transcribe_error_message(message)
+        QMessageBox.warning(self, self.ui.error, pretty)
+
+    def on_worker_finished(self, success: bool):
+        self.debug_log("WORKER FINISHED")
         self.current_worker = None
+        self.eta_timer.stop()
+        elapsed_text = self.current_elapsed_text()
         self._set_running_state(False)
 
-        if self.stop_flag["stop"]:
-            self.status.setText(f"🛑 {self.ui.stopped}")
+        if self.control_flag["stop"]:
+            self.on_status_update(self.ui.stopped)
+            self.eta_label.setText(f"Elapsed: {elapsed_text}  |  Remaining: 00:00")
         else:
-            self.status.setText(f"✅ {self.ui.done} · {self.ui.ready_for_new_input}")
+            if success and not self.last_run_had_error:
+                if self.progress.value() < 100:
+                    self.progress.setValue(100)
+                self.last_progress_value = 100
+                self.on_status_update(f"{self.ui.done} · {self.ui.ready_for_new_input}")
+            else:
+                self.on_status_update(f"{self.ui.done_with_error} · {self.ui.ready_for_new_input}")
+
+            self.eta_label.setText(f"Elapsed: {elapsed_text}  |  Remaining: 00:00")
+
+        self.control_flag["stop"] = False
+        self.control_flag["pause"] = False
+        self._set_running_state(False)
 
     def append_result(self, text: str):
         if self.last_result_text:
@@ -704,6 +1147,18 @@ class MainWindow(QWidget):
 
         self.output.append(text)
         self.output.moveCursor(QTextCursor.End)
+        self.debug_log("RESULT APPENDED TO UI")
+
+    def _derive_export_title(self) -> str:
+        text = self.last_result_text.strip()
+        if not text:
+            return "result"
+
+        first_line = text.splitlines()[0].strip()
+        m = re.match(r"^===\s*(.*?)\s*===$", first_line)
+        if m:
+            return m.group(1).strip() or "result"
+        return "result"
 
     def save_result_as(self):
         if not self.last_result_text.strip():
@@ -713,17 +1168,32 @@ class MainWindow(QWidget):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             self.ui.save_dialog_title,
-            "result.txt",
+            f"{self._derive_export_title()}.txt",
             self.ui.save_filter,
         )
 
         if not file_path:
             return
 
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(self.last_result_text)
+        payload = self.last_export_payload
+        if payload is None:
+            payload = build_export_payload(
+                title=self._derive_export_title(),
+                transcript="",
+                summary="",
+                metadata={},
+                raw_text=self.last_result_text,
+            )
+
+        try:
+            export_by_extension(file_path, payload)
+        except Exception as e:
+            QMessageBox.warning(self, self.ui.error, str(e))
+            self.debug_log(f"RESULT SAVE ERROR: {e}")
+            return
 
         QMessageBox.information(self, self.ui.window_title, f"{self.ui.saved_ok}\n{file_path}")
+        self.debug_log(f"RESULT SAVED AS: {file_path}")
 
     def copy_result(self):
         if not self.last_result_text.strip():
@@ -731,7 +1201,8 @@ class MainWindow(QWidget):
             return
 
         QApplication.clipboard().setText(self.last_result_text)
-        self.status.setText(f"✅ {self.ui.copy_ok}")
+        self.on_status_update(self.ui.copy_ok)
+        self.debug_log("RESULT COPIED TO CLIPBOARD")
 
     def open_output_folder(self):
         from pipeline.knowledge import get_output_dir
@@ -740,5 +1211,7 @@ class MainWindow(QWidget):
 
         try:
             os.startfile(output_dir)
+            self.debug_log(f"OPEN OUTPUT FOLDER: {output_dir}")
         except Exception as e:
             QMessageBox.warning(self, self.ui.error, f"{self.ui.open_folder_fail}\n{e}")
+            self.debug_log(f"OPEN OUTPUT FOLDER ERROR: {e}")

@@ -1,93 +1,37 @@
-Media2Txt Pro 使用說明
-========================
+How to use
 
-一、功能概覽
+1. Launch the app with run.bat
+2. Paste one or more YouTube URLs, or add local media files
+3. Choose summary language:
+   - Chinese (Traditional)
+   - English
+4. Click Start
+5. Use Pause / Resume / Stop as needed
+6. Results appear on the right side
+7. Use Save As / Copy / Open Output Folder when done
+
+Behavior summary:
+- If good subtitles are available, the app prefers subtitle-based transcript
+- If subtitles are missing, Whisper transcription is used
+- Chinese output is normalized to Traditional Chinese
+- Long media automatically uses faster transcription settings
+
+GPU 閃退保護 / Native Crash Isolation
 ----------------------------------------
-這個程式目前支援：
+新版預設啟用獨立轉錄子程序：
+- MEDIA2TXT_TRANSCRIBE_SUBPROCESS=1
+- GPU 預設 compute type：int8_float16
+- 15 分鐘以上使用長片低負載策略
+- 40 分鐘以上使用超長片策略
 
-1. YouTube 連結批次辨識
-2. 本機影片 / 音訊批次辨識
-3. 自動輸出 Transcript
-4. 自動輸出 Summary
-5. Summary 可選：
-   - 中文（繁體）
-   - 英文
-6. 輸出檔名自動使用影片標題或本機檔名
-7. 支援一鍵複製 / 另存新檔 / 開啟輸出資料夾
+當 CUDA / CTranslate2 發生 Windows 0xC0000005 原生閃退時：
+1. 主 UI 不會一起關閉
+2. GPU 子程序失敗會被偵測
+3. 自動建立 CPU 子程序重試
+4. 單支任務仍由原本批次錯誤隔離機制處理
 
-二、啟動
-----------------------------------------
-在專案資料夾執行：
-
-  python main.py
-
-三、使用 YouTube 批次
-----------------------------------------
-1. 啟動程式
-2. 在輸入區每行貼一個 YouTube URL
-3. 按「開始」
-
-範例：
-
-  https://www.youtube.com/watch?v=xxxxxxxxxxx
-  https://www.youtube.com/watch?v=yyyyyyyyyyy
-
-四、使用本機影片 / 音訊批次
-----------------------------------------
-1. 按「加入本機影片 / 音訊」
-2. 可一次選多個檔案
-3. 按「開始」
-
-五、混合批次
-----------------------------------------
-你可以同時：
-- 貼多個 YouTube URL
-- 加入多個本機影片 / 音訊
-
-然後一次開始處理。
-
-六、Summary 語言切換
-----------------------------------------
-在 UI 的「Summary 語言」欄位中選擇：
-- 中文（繁體）
-- 英文
-
-七、Transcript 與 Summary 邏輯
-----------------------------------------
-1. YouTube 影片：
-   優先抓字幕
-   - 手動字幕
-   - 自動字幕
-
-2. 若沒有可用字幕：
-   fallback 到 Whisper 語音辨識
-
-3. 音樂 / 歌詞類影片：
-   會使用較適合音樂的辨識模式
-   但不保證等於官方歌詞
-
-八、輸出位置
-----------------------------------------
-所有輸出預設存到：
-
-  knowledge/
-
-九、常見注意事項
-----------------------------------------
-1. 中文輸出統一為繁體中文
-2. 若 YouTube 擷取失敗：
-   - 確認 Node.js 已安裝
-   - 確認 yt-dlp 已更新
-   - 必要時使用 cookies.txt
-3. 若 Summary 無法產生：
-   - 確認已安裝 Ollama
-   - 先執行：
-       ollama run mistral
-4. 若看到音訊時間戳警告：
-   - 安裝 ffmpeg 可改善
-
-十、打包
-----------------------------------------
-執行：
-
-  build.bat
+建議模式：
+- Auto / GPU Auto：日常使用，GPU int8_float16，失敗自動 CPU fallback
+- CPU Only：完全不用 CUDA，最穩定但較慢
+- Low Resource：更低 beam / best_of，適合長影片或顯存較小電腦
+- GPU Check Only：只檢查 CUDA DLL 與環境

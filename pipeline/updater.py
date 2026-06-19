@@ -1,12 +1,8 @@
-import subprocess
-import sys
+"""Community edition placeholder updater module."""
 
-def update_ytdlp():
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
-            check=True
-        )
-        print("yt-dlp 更新完成")
-    except Exception as e:
-        print(f"更新失敗: {e}")
+
+def check_for_updates() -> dict:
+    return {
+        "available": False,
+        "message": "Community edition does not include in-app updates.",
+    }
