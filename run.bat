@@ -10,6 +10,7 @@ REM   1. Auto / GPU Auto
 REM   2. CPU Only
 REM   3. Low Resource
 REM   4. GPU Check Only
+REM   5. Update yt-dlp then Auto
 REM
 REM Python priority:
 REM   1. Project .venv\Scripts\python.exe
@@ -25,6 +26,7 @@ REM
 REM Notes:
 REM   - Relative paths are preferred for portability.
 REM   - Absolute legacy path is kept only as a fallback for older home-PC setup.
+REM   - yt-dlp cookies-from-browser is disabled by default because Chrome DPAPI can fail.
 REM ==================================================
 
 set "BASE_DIR=%~dp0"
@@ -65,8 +67,9 @@ echo 1. Auto / GPU Auto
 echo 2. CPU Only
 echo 3. Low Resource
 echo 4. GPU Check Only
+echo 5. Update yt-dlp then Auto
 echo ======================================
-choice /c 1234 /n /m "Choose mode [1-4]: "
+choice /c 12345 /n /m "Choose mode [1-5]: "
 set "MODE=%ERRORLEVEL%"
 
 echo.
@@ -75,6 +78,7 @@ set "MEDIA2TXT_OFFLINE=1"
 set "WHISPER_DEVICE=auto"
 set "MEDIA2TXT_LOW_RESOURCE=0"
 set "GPU_CHECK_ONLY=0"
+set "YTDLP_UPDATE_FIRST=0"
 
 REM Native crash isolation and stable RTX 3060 defaults.
 REM GPU/CTranslate2 work runs in a child process so 0xC0000005 cannot close the UI.
@@ -105,6 +109,12 @@ if "%MODE%"=="4" (
     set "GPU_CHECK_ONLY=1"
 )
 
+if "%MODE%"=="5" (
+    set "WHISPER_DEVICE=auto"
+    set "MEDIA2TXT_LOW_RESOURCE=0"
+    set "YTDLP_UPDATE_FIRST=1"
+)
+
 REM ==================================================
 REM Ollama summary model routing
 REM Stable mode:
@@ -133,6 +143,30 @@ if not defined OLLAMA_MODEL_ZH_FALLBACKS (
 
 if not defined OLLAMA_MODEL_EN_FALLBACKS (
     set "OLLAMA_MODEL_EN_FALLBACKS=llama3.1,llama3"
+)
+
+REM ==================================================
+REM yt-dlp YouTube downloader settings
+REM ==================================================
+REM Your latest manual test:
+REM   - yt-dlp 2026.8.19 succeeded with normal bestaudio/best.
+REM   - player_client fallback also succeeded.
+REM   - Chrome cookies failed with DPAPI decrypt.
+REM Therefore:
+REM   - Keep player clients enabled.
+REM   - Keep cookies disabled by default.
+REM
+REM To manually enable cookies when needed:
+REM   set YTDLP_COOKIES_FROM_BROWSER=edge
+REM   set YTDLP_COOKIES_FROM_BROWSER=chrome
+REM ==================================================
+
+if not defined YTDLP_PLAYER_CLIENTS (
+    set "YTDLP_PLAYER_CLIENTS=default,ios,android"
+)
+
+if not defined YTDLP_COOKIES_FROM_BROWSER (
+    set "YTDLP_COOKIES_FROM_BROWSER="
 )
 
 REM ==================================================
@@ -198,7 +232,7 @@ set "SITEPKG="
 set "SITEPKG_PROBE=%BASE_DIR%.media2txt_sitepkg_probe.py"
 
 REM Use sysconfig first because it returns the active interpreter site-packages
-REM path for both system Python and .venv.  The FOR /F command intentionally wraps
+REM path for both system Python and .venv. The FOR /F command intentionally wraps
 REM cmd /d /s /c with an extra quote pair so full Python paths with spaces are safe.
 > "%SITEPKG_PROBE%" echo import sysconfig, site
 >>"%SITEPKG_PROBE%" echo paths = []
@@ -372,6 +406,11 @@ echo MEDIA2TXT_LOW_RESOURCE=%MEDIA2TXT_LOW_RESOURCE%
 echo OLLAMA_MODEL_ZH=%OLLAMA_MODEL_ZH%
 echo OLLAMA_MODEL_EN=%OLLAMA_MODEL_EN%
 echo OLLAMA_URL=%OLLAMA_URL%
+echo OLLAMA_MODEL_ZH_FALLBACKS=%OLLAMA_MODEL_ZH_FALLBACKS%
+echo OLLAMA_MODEL_EN_FALLBACKS=%OLLAMA_MODEL_EN_FALLBACKS%
+echo YTDLP_PLAYER_CLIENTS=%YTDLP_PLAYER_CLIENTS%
+echo YTDLP_COOKIES_FROM_BROWSER=%YTDLP_COOKIES_FROM_BROWSER%
+echo YTDLP_UPDATE_FIRST=%YTDLP_UPDATE_FIRST%
 echo GPU_CHECK_ONLY=%GPU_CHECK_ONLY%
 echo MEDIA2TXT_TRANSCRIBE_SUBPROCESS=%MEDIA2TXT_TRANSCRIBE_SUBPROCESS%
 echo MEDIA2TXT_GPU_COMPUTE_TYPE=%MEDIA2TXT_GPU_COMPUTE_TYPE%
@@ -390,6 +429,28 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+
+REM ==================================================
+REM yt-dlp check / optional update
+REM ==================================================
+
+if "%YTDLP_UPDATE_FIRST%"=="1" (
+    echo [CHECK] Updating yt-dlp before run...
+    "%PYTHON_EXE%" -m pip install -U yt-dlp
+    echo.
+)
+
+echo [CHECK] yt-dlp version
+"%PYTHON_EXE%" -m yt_dlp --version >nul 2>nul
+if errorlevel 1 (
+    echo [WARN] yt-dlp not found. Installing yt-dlp...
+    "%PYTHON_EXE%" -m pip install -U yt-dlp
+    echo.
+    "%PYTHON_EXE%" -m yt_dlp --version
+) else (
+    "%PYTHON_EXE%" -m yt_dlp --version
+)
+echo.
 
 if not exist "%WHISPER_MODEL_DIR%\model.bin" (
     echo [WARN] Local Whisper model not found:
@@ -441,6 +502,42 @@ if "%GPU_CHECK_ONLY%"=="1" (
     pause
     exit /b %EXIT_CODE%
 )
+
+REM ==================================================
+REM Ollama availability check
+REM Do this before GUI to avoid wasting transcription time
+REM and failing only at summary stage.
+REM ==================================================
+
+echo [CHECK] Ollama server
+"%PYTHON_EXE%" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11434/api/tags', timeout=3); print('OLLAMA OK')" >nul 2>nul
+
+if errorlevel 1 (
+    echo [WARN] Ollama is not running. Trying to start Ollama...
+    start "" /min ollama serve
+    timeout /t 5 >nul
+
+    "%PYTHON_EXE%" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11434/api/tags', timeout=5); print('OLLAMA OK')" >nul 2>nul
+
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Ollama is still not available.
+        echo Please start Ollama manually:
+        echo   ollama serve
+        echo.
+        echo Then verify:
+        echo   ollama list
+        echo   curl http://127.0.0.1:11434/api/tags
+        echo.
+        echo The app can transcribe, but summary will fail without Ollama.
+        echo.
+        pause
+        exit /b 1
+    )
+)
+
+echo [OK] Ollama server ready.
+echo.
 
 echo Starting app...
 echo.

@@ -9,6 +9,7 @@ from pipeline.cleaner import clean_summary, to_traditional_chinese
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/generate").strip()
 DEFAULT_OLLAMA_MODEL_ZH = os.environ.get("OLLAMA_MODEL_ZH", "qwen2.5:14b").strip()
 DEFAULT_OLLAMA_MODEL_EN = os.environ.get("OLLAMA_MODEL_EN", "llama3.1").strip()
+OLLAMA_TIMEOUT_SEC = int(os.environ.get("OLLAMA_TIMEOUT_SEC", "300") or "300")
 
 
 # =========================
@@ -99,7 +100,7 @@ def _call_ollama(prompt: str, summary_language: str, stop_flag=None, temperature
     }
 
     try:
-        resp = requests.post(OLLAMA_URL, json=payload, timeout=300)
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SEC)
         resp.raise_for_status()
         data = resp.json()
         text = (data.get("response") or "").strip()
@@ -156,6 +157,16 @@ def detect_domain(title: str, transcript: str) -> str:
         "法律", "法規", "判決", "合約", "責任", "權利", "義務",
         "law", "legal", "contract", "liability", "compliance",
     ]
+    technology_course_keywords = [
+        "韋東山", "嵌入式", "裸機", "驅動大全", "驅動", "核心", "內核",
+        "linux驅動", "linux 3.4.2", "u-boot", "uboot", "busybox", "根文件系統",
+        "makefile", "交叉編譯", "toolchain", "arm", "gpio", "i2c", "iic", "spi",
+        "lcd", "framebuffer", "顯存", "freetype", "字體", "數位相框", "文件瀏覽器",
+        "nor flash", "nand flash", "mtd", "input subsystem", "輸入子系統",
+        "系統調用", "segmentation fault", "段錯誤", "gdb", "strace", "mmap",
+        "kernel", "driver", "device tree", "dts", "module", "insmod", "rmmod",
+    ]
+
     technology_keywords = [
         "程式", "系統", "架構", "部署", "除錯", "效能", "延遲",
         "throughput", "latency", "api", "backend", "frontend",
@@ -182,6 +193,8 @@ def detect_domain(title: str, transcript: str) -> str:
         return "science"
     if _contains_any(sample, legal_keywords):
         return "legal"
+    if _contains_any(sample, technology_course_keywords):
+        return "technology_course"
     if _contains_any(sample, technology_keywords):
         return "technology"
     if _contains_any(sample, business_keywords):
@@ -287,6 +300,29 @@ def _domain_instruction(domain: str, summary_language: str) -> str:
             "7. do not write inspirational fluff"
         )
 
+    if domain == "technology_course":
+        return (
+            "你是嵌入式 Linux / 驅動 / 系統程式技術課程摘要助手。\n"
+            "核心規則：\n"
+            "1. 一定整理本課主題與學習目標\n"
+            "2. 一定保留核心概念、架構、流程\n"
+            "3. 一定保留關鍵 API / 指令 / 檔案 / Makefile / kernel 設定\n"
+            "4. 一定整理除錯方法與錯誤現象\n"
+            "5. 一定列出實作步驟與可複習清單\n"
+            "6. 不可寫成空泛心得，不可刪掉技術細節\n"
+            "7. 若逐字稿因 ASR 造成名詞不準，請以保守方式整理，不要捏造不存在的 API"
+        ) if zh else (
+            "You are an embedded Linux / driver / systems programming course summarizer.\n"
+            "Core rules:\n"
+            "1. identify the topic and learning objective\n"
+            "2. preserve core concepts, architecture, and workflow\n"
+            "3. preserve APIs, commands, files, Makefile and kernel settings\n"
+            "4. extract debugging methods and failure symptoms\n"
+            "5. list implementation steps and a review checklist\n"
+            "6. do not write vague commentary; keep technical details\n"
+            "7. do not invent APIs when ASR terms are uncertain"
+        )
+
     if domain == "general":
         return (
             "你是專業摘要助手。\n"
@@ -348,6 +384,18 @@ def _format_instruction(summary_language: str, domain: str) -> str:
                 "4. Practical advice\n"
                 "5. Possible overreach / caution"
             )
+        if domain == "technology_course":
+            return (
+                "Use this exact structure:\n"
+                "1. Lesson topic\n"
+                "2. Core concepts\n"
+                "3. Implementation / operation flow\n"
+                "4. Key APIs / commands / files\n"
+                "5. Program architecture\n"
+                "6. Debugging focus\n"
+                "7. Common mistakes\n"
+                "8. Review checklist"
+            )
         return (
             "Use this exact structure:\n"
             "1. Core takeaway\n"
@@ -383,6 +431,18 @@ def _format_instruction(summary_language: str, domain: str) -> str:
             "3. 影片使用的例子 / 比喻\n"
             "4. 可執行建議\n"
             "5. 可能誇飾 / 延伸之處"
+        )
+    if domain == "technology_course":
+        return (
+            "輸出格式固定為：\n"
+            "1. 本課主題\n"
+            "2. 核心概念\n"
+            "3. 操作 / 實作流程\n"
+            "4. 關鍵 API / 指令 / 檔案\n"
+            "5. 程式架構\n"
+            "6. 除錯重點\n"
+            "7. 易錯點\n"
+            "8. 複習清單"
         )
     return (
         "輸出格式固定為：\n"
@@ -423,6 +483,14 @@ def _extract_focus_lines(domain: str, text: str) -> str:
             "界線", "陰影", "創傷", "依附", "情緒", "人格", "覺醒", "15%到20%", "5到10倍",
             "內在小孩", "高敏人", "人間清醒", "反人性", "底層邏輯", "情緒解離", "灰度思維",
             "六個", "五個", "三個", "三件事",
+        ]
+    elif domain == "technology_course":
+        keywords = [
+            "Linux", "嵌入式", "驅動", "核心", "內核", "Makefile", "API", "函數", "系統調用",
+            "kernel", "driver", "module", "insmod", "rmmod", "GPIO", "I2C", "IIC", "SPI",
+            "LCD", "framebuffer", "顯存", "freetype", "mmap", "gdb", "strace", "段錯誤",
+            "流程", "步驟", "編譯", "配置", "測試", "除錯", "錯誤", "文件", "程式", "代碼",
+            "NorFlash", "NandFlash", "U-Boot", "根文件系統", "輸入子系統", "數位相框",
         ]
     else:
         keywords = ["第1", "第一", "第二", "第三", "第四", "第五", "第六", "三個", "五個", "六個", "3個", "5個", "6個"]
@@ -635,6 +703,14 @@ def _build_chunk_prompt(
             "- 若有具體建議，必須列出\n"
             "- 若內容有誇飾性講法，要標出可能延伸之處\n"
         )
+    elif domain == "technology_course":
+        extra = (
+            "技術課程額外規則：\n"
+            "- 本段若包含程式碼、API、檔名、命令、Makefile 規則，必須保留\n"
+            "- 要分清楚：概念、操作、程式架構、除錯方法\n"
+            "- 若講到錯誤現象、測試方法、核心設定，要明確列出\n"
+            "- 不要把技術名詞改成泛泛而談\n"
+        )
     else:
         if enum_target:
             extra = f"原文明顯是 {enum_target} 點結構，請盡量保持相同結構，不可任意合併。"
@@ -729,6 +805,14 @@ def _build_final_prompt(
             "- 要指出可能誇飾 / 延伸之處\n"
             "- 要保留可執行建議\n"
             "- 要保留理論骨架，不要只剩漂亮話\n"
+        )
+    elif domain == "technology_course":
+        extra = (
+            "最終技術課程規則：\n"
+            "- 一定輸出『本課主題 / 核心概念 / 實作流程 / 關鍵 API 指令檔案 / 程式架構 / 除錯重點 / 易錯點 / 複習清單』\n"
+            "- 必須保留 embedded Linux、kernel、driver、Makefile、API、命令、檔案路徑等技術細節\n"
+            "- 若逐字稿名詞不確定，只能保守整理，不可捏造不存在的函數或參數\n"
+            "- 不可寫成心得文或泛用學習建議\n"
         )
     else:
         if enum_target:
@@ -950,6 +1034,165 @@ def _post_process_summary(summary_text: str, domain: str, summary_language: str)
     return text.strip()
 
 
+
+# =========================
+# Timeout-safe fallback summary
+# =========================
+
+def _select_fallback_lines(domain: str, transcript: str, max_lines: int = 80) -> List[str]:
+    text = _collapse_blank_lines(transcript)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    noise = [
+        "moon river", "晚安", "拜拜", "app", "0800", "電話撥通",
+        "免費下載", "訂閱", "按讚", "分享", "小鈴鐺",
+    ]
+
+    preferred_keywords = []
+    if domain == "technology_course":
+        preferred_keywords = [
+            "linux", "驅動", "核心", "內核", "kernel", "driver", "makefile",
+            "api", "函數", "系統調用", "gdb", "strace", "段錯誤", "mmap",
+            "gpio", "i2c", "iic", "spi", "lcd", "framebuffer", "freetype",
+            "編譯", "配置", "測試", "除錯", "錯誤", "流程", "步驟", "程式", "代碼",
+        ]
+    elif domain == "technology":
+        preferred_keywords = ["架構", "程式", "api", "系統", "除錯", "效能", "bug", "部署", "kernel", "driver"]
+    elif domain.startswith("finance"):
+        preferred_keywords = ["利率", "報酬", "價格", "成交量", "支撐", "壓力", "風險", "條件", "假設"]
+    elif domain == "psychology_growth":
+        preferred_keywords = ["理論", "情緒", "投射", "界線", "創傷", "建議", "關係", "自我"]
+
+    selected = []
+    seen = set()
+
+    def add_line(line: str):
+        norm = re.sub(r"\s+", "", line.lower())
+        if not norm or norm in seen:
+            return
+        if any(n in norm for n in noise):
+            return
+        if len(line) < 8:
+            return
+        seen.add(norm)
+        selected.append(line)
+
+    for line in lines:
+        lower = line.lower()
+        if preferred_keywords and any(k.lower() in lower for k in preferred_keywords):
+            add_line(line)
+            if len(selected) >= max_lines:
+                return selected
+
+    # 補頭中尾，避免只摘到單一區段。
+    if lines:
+        picks = []
+        picks.extend(lines[:20])
+        mid = len(lines) // 2
+        picks.extend(lines[max(0, mid - 10): mid + 10])
+        picks.extend(lines[-20:])
+        for line in picks:
+            add_line(line)
+            if len(selected) >= max_lines:
+                break
+
+    return selected[:max_lines]
+
+
+def build_fallback_summary(
+    title: str,
+    transcript: str,
+    summary_error: str = "",
+    summary_language: str = "zh",
+    transcript_source: str = "",
+    media_source: str = "",
+) -> str:
+    """
+    Ollama timeout / error 時的保底摘要。
+    這個函式不呼叫任何 LLM，只根據已成功產出的 transcript 產生可保存內容，
+    避免 Whisper 已完成但整支影片沒有輸出。
+    """
+    title = (title or "").strip()
+    transcript = _collapse_blank_lines(transcript)
+
+    if summary_language == "zh":
+        title = to_traditional_chinese(title)
+        transcript = to_traditional_chinese(transcript)
+
+    domain = detect_domain(title, transcript)
+    lines = _select_fallback_lines(domain, transcript, max_lines=70)
+
+    if summary_language == "en":
+        if domain == "technology_course":
+            header = [
+                "[Fallback summary]",
+                "The transcript was completed, but Ollama summary generation timed out or failed.",
+                "The following is an extractive technical fallback summary generated from the transcript.",
+                "",
+                "1. Lesson topic",
+                f"- {title or 'Untitled'}",
+                "",
+                "2. Key transcript excerpts / technical points",
+            ]
+        else:
+            header = [
+                "[Fallback summary]",
+                "The transcript was completed, but Ollama summary generation timed out or failed.",
+                "The following extractive summary was generated from the transcript.",
+                "",
+                "1. Core topic",
+                f"- {title or 'Untitled'}",
+                "",
+                "2. Key transcript excerpts",
+            ]
+        body = [f"- {ln}" for ln in lines] or ["- No reliable transcript lines were available for fallback extraction."]
+        tail = [
+            "",
+            "3. Status",
+            f"- Transcript source: {transcript_source}",
+            f"- Media source: {media_source}",
+            f"- Summary status: fallback_error",
+        ]
+        if summary_error:
+            tail.append(f"- Error: {summary_error}")
+        return _collapse_blank_lines("\n".join(header + body + tail))
+
+    if domain == "technology_course":
+        header = [
+            "【保底摘要】",
+            "本影片已完成 Whisper 轉錄，但 Ollama 摘要逾時或失敗。",
+            "以下是不呼叫 LLM、直接根據逐字稿抽取的技術保底摘要，避免轉錄成果遺失。",
+            "",
+            "1. 本課主題",
+            f"- {title or '未命名'}",
+            "",
+            "2. 核心概念 / 操作流程 / 關鍵技術片段",
+        ]
+    else:
+        header = [
+            "【保底摘要】",
+            "本影片已完成 Whisper 轉錄，但 Ollama 摘要逾時或失敗。",
+            "以下是不呼叫 LLM、直接根據逐字稿抽取的保底摘要。",
+            "",
+            "1. 主題",
+            f"- {title or '未命名'}",
+            "",
+            "2. 逐字稿關鍵片段",
+        ]
+
+    body = [f"- {ln}" for ln in lines] or ["- 沒有足夠可靠的逐字稿片段可供抽取。"]
+    tail = [
+        "",
+        "3. 狀態",
+        f"- 轉錄來源：{transcript_source}",
+        f"- 媒體來源：{media_source}",
+        "- 摘要狀態：fallback_error",
+    ]
+    if summary_error:
+        tail.append(f"- 錯誤原因：{summary_error}")
+
+    return _collapse_blank_lines("\n".join(header + body + tail))
+
 # =========================
 # Public API
 # =========================
@@ -978,7 +1221,9 @@ def summarize(
     transcript = _normalize_transcript(transcript, domain, summary_language)
     enum_target = _extract_enumeration_target(transcript, domain)
 
-    if len(transcript) <= 7500:
+    single_pass_limit = 3600 if domain == "technology_course" else 6500
+
+    if len(transcript) <= single_pass_limit:
         prompt = _build_final_prompt(
             domain=domain,
             title=title,
@@ -993,7 +1238,8 @@ def summarize(
         result = _enforce_summary_language(result, summary_language, stop_flag=stop_flag)
         return _post_process_summary(result, domain, summary_language)
 
-    chunks = _split_text(transcript, chunk_size=5500, overlap=300)
+    chunk_size = 3200 if domain == "technology_course" else 5000
+    chunks = _split_text(transcript, chunk_size=chunk_size, overlap=250)
     chunk_notes = []
 
     total = len(chunks)

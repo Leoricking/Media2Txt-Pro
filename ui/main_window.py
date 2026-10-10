@@ -278,13 +278,60 @@ class Worker(QRunnable):
                 self.signals.status.emit(status_text)
             time.sleep(0.15)
 
+    def _emit_task_failure(self, index: int, total: int, task_ref: str, error: Exception):
+        self.had_error = True
+        msg = str(error)
+        self.dbg(f"TASK ERROR {index}/{total}: {task_ref} :: {msg}")
+        block = (
+            f"=== TASK FAILED [{index}/{total}] ===\n\n"
+            f"[Task] {task_ref}\n"
+            f"[Error] {msg}\n"
+            f"[Action] This task was skipped. Batch continues with the next task.\n"
+        )
+        self.signals.result.emit(block)
+
+    def _build_final_text(
+        self,
+        video_title: str,
+        media_source: str,
+        media_ref: str,
+        transcript_source: str,
+        transcript: str,
+        summary: str,
+        low_confidence_warning: str = "",
+        summary_status: str = "ok",
+        summary_error: str = "",
+    ) -> str:
+        final_text = (
+            f"=== {video_title} ===\n\n"
+            f"[{self.s.media_source}] {media_source}\n"
+            f"[{self.s.video_url}] {media_ref}\n"
+            f"[{self.s.transcript_source}] {transcript_source}\n"
+        )
+
+        if low_confidence_warning:
+            final_text += f"[Warning] {to_traditional_chinese(low_confidence_warning)}\n"
+
+        if summary_status != "ok":
+            final_text += f"[Summary Status] {summary_status}\n"
+            if summary_error:
+                final_text += f"[Summary Error] {summary_error}\n"
+
+        final_text += (
+            f"\n[{self.s.transcript}]\n"
+            f"{transcript}\n\n"
+            f"[{self.s.summary}]\n"
+            f"{summary}\n"
+        )
+        return final_text
+
     def run(self):
         try:
             self.dbg("START WORKER RUN")
 
             from pipeline.downloader import download_audio, process_local_media
             from pipeline.transcriber import transcribe, get_transcriber_runtime_info
-            from pipeline.summarizer import summarize
+            from pipeline.summarizer import summarize, build_fallback_summary
             from pipeline.knowledge import save_note
 
             runtime_info = get_transcriber_runtime_info()
@@ -293,7 +340,14 @@ class Worker(QRunnable):
             total = len(self.tasks)
             self.dbg(f"TASK TOTAL: {total}")
 
+            success_count = 0
+            failed_tasks = []
+            fallback_tasks = []
+
             for i, task in enumerate(self.tasks):
+                task_index = i + 1
+                task_ref = task.get("value", "")
+
                 if self.is_stopped():
                     self.signals.status.emit(self.s.stopped)
                     self.dbg("WORKER STOPPED BY USER")
@@ -302,151 +356,217 @@ class Worker(QRunnable):
 
                 self.wait_if_paused(self.s.paused)
 
-                task_type = task["type"]
-                self.dbg(f"PROCESS TASK {i+1}/{total} TYPE={task_type}")
+                try:
+                    task_type = task["type"]
+                    self.dbg(f"PROCESS TASK {task_index}/{total} TYPE={task_type}")
 
-                if task_type == "youtube":
-                    url = task["value"]
-                    self.signals.progress.emit(0)
-                    self.signals.status.emit(f"[{i+1}/{total}] {self.s.downloading}")
-                    self.dbg(f"DOWNLOAD YOUTUBE: {url}")
-                    media_info = download_audio(url, self.signals.progress.emit, self.control_flag)
-                    media_source = self.s.source_youtube
-                    media_ref = url
+                    if task_type == "youtube":
+                        url = task["value"]
+                        task_ref = url
+                        self.signals.progress.emit(0)
+                        self.signals.status.emit(f"[{task_index}/{total}] {self.s.downloading}")
+                        self.dbg(f"DOWNLOAD YOUTUBE: {url}")
+                        media_info = download_audio(url, self.signals.progress.emit, self.control_flag)
+                        media_source = self.s.source_youtube
+                        media_ref = url
 
-                elif task_type == "local":
-                    local_path = task["value"]
-                    self.signals.progress.emit(0)
-                    self.signals.status.emit(f"[{i+1}/{total}] {self.s.transcribing}")
-                    self.dbg(f"PROCESS LOCAL FILE: {local_path}")
-                    media_info = process_local_media(local_path)
-                    media_source = self.s.source_local
-                    media_ref = local_path
+                    elif task_type == "local":
+                        local_path = task["value"]
+                        task_ref = local_path
+                        self.signals.progress.emit(0)
+                        self.signals.status.emit(f"[{task_index}/{total}] {self.s.transcribing}")
+                        self.dbg(f"PROCESS LOCAL FILE: {local_path}")
+                        media_info = process_local_media(local_path)
+                        media_source = self.s.source_local
+                        media_ref = local_path
 
-                else:
-                    raise Exception(f"Unknown task type: {task_type}")
+                    else:
+                        raise Exception(f"Unknown task type: {task_type}")
 
-                audio_path = media_info["audio_path"]
-                video_title = to_traditional_chinese(media_info["title"])
-                video_id = media_info["video_id"]
-                subtitle_text = media_info.get("subtitle_text", "") or ""
-                subtitle_source = media_info.get("subtitle_source", "") or ""
-                is_music_like = media_info.get("is_music_like", False)
+                    audio_path = media_info["audio_path"]
+                    video_title = to_traditional_chinese(media_info["title"])
+                    video_id = media_info["video_id"]
+                    subtitle_text = media_info.get("subtitle_text", "") or ""
+                    subtitle_source = media_info.get("subtitle_source", "") or ""
+                    is_music_like = media_info.get("is_music_like", False)
 
-                self.dbg(f"TITLE: {video_title}")
-                self.dbg(f"AUDIO PATH: {audio_path}")
-                self.dbg(f"HAS SUBTITLE: {'YES' if subtitle_text.strip() else 'NO'}")
-                self.dbg(f"IS MUSIC LIKE: {is_music_like}")
+                    self.dbg(f"TITLE: {video_title}")
+                    self.dbg(f"AUDIO PATH: {audio_path}")
+                    self.dbg(f"HAS SUBTITLE: {'YES' if subtitle_text.strip() else 'NO'}")
+                    self.dbg(f"IS MUSIC LIKE: {is_music_like}")
 
-                if self.is_stopped():
-                    self.signals.status.emit(self.s.stopped)
-                    self.dbg("WORKER STOPPED BEFORE TRANSCRIBE")
-                    self.signals.finished.emit(False)
-                    return
+                    if self.is_stopped():
+                        self.signals.status.emit(self.s.stopped)
+                        self.dbg("WORKER STOPPED BEFORE TRANSCRIBE")
+                        self.signals.finished.emit(False)
+                        return
 
-                self.wait_if_paused(self.s.paused)
+                    self.wait_if_paused(self.s.paused)
 
-                transcript = ""
-                transcript_source = ""
+                    transcript = ""
+                    transcript_source = ""
 
-                if subtitle_text.strip():
-                    transcript = clean_transcript(subtitle_text, force_traditional=(self.summary_language == "zh"))
-                    transcript_source = self.s.source_manual_sub if subtitle_source == "manual" else self.s.source_auto_sub
-                    self.dbg(f"USE SUBTITLE SOURCE: {transcript_source}")
-                    self.signals.progress.emit(65)
-                else:
-                    self.signals.progress.emit(0)
-                    self.signals.status.emit(f"[{i+1}/{total}] {self.s.transcribing}")
-                    self.dbg("CALL transcribe()")
-                    transcript = transcribe(
-                        audio_path=audio_path,
-                        progress_callback=self.signals.progress.emit,
-                        stop_flag=self.control_flag,
-                        is_music_like=is_music_like,
-                        debug_callback=self.dbg,
+                    if subtitle_text.strip():
+                        transcript = clean_transcript(subtitle_text, force_traditional=(self.summary_language == "zh"))
+                        transcript_source = self.s.source_manual_sub if subtitle_source == "manual" else self.s.source_auto_sub
+                        self.dbg(f"USE SUBTITLE SOURCE: {transcript_source}")
+                        self.signals.progress.emit(65)
+                    else:
+                        self.signals.progress.emit(0)
+                        self.signals.status.emit(f"[{task_index}/{total}] {self.s.transcribing}")
+                        self.dbg("CALL transcribe()")
+                        transcript = transcribe(
+                            audio_path=audio_path,
+                            progress_callback=self.signals.progress.emit,
+                            stop_flag=self.control_flag,
+                            is_music_like=is_music_like,
+                            debug_callback=self.dbg,
+                        )
+                        transcript = clean_transcript(transcript, force_traditional=(self.summary_language == "zh"))
+                        transcript_source = self.s.source_whisper_music if is_music_like else self.s.source_whisper
+                        self.dbg(f"TRANSCRIBE DONE, SOURCE: {transcript_source}")
+
+                    low_confidence_warning = ""
+                    if is_music_like and not subtitle_text.strip() and looks_too_short(transcript):
+                        low_confidence_warning = self.s.low_confidence_note
+                        self.dbg("LOW CONFIDENCE WARNING TRIGGERED")
+
+                    if self.is_stopped():
+                        self.signals.status.emit(self.s.stopped)
+                        self.dbg("WORKER STOPPED BEFORE SUMMARY")
+                        self.signals.finished.emit(False)
+                        return
+
+                    self.wait_if_paused(self.s.paused)
+
+                    self.signals.progress.emit(85)
+                    self.signals.status.emit(f"[{task_index}/{total}] {self.s.summarizing}")
+                    self.dbg("CALL summarize()")
+
+                    summary_input = transcript
+                    if low_confidence_warning:
+                        summary_input = f"{low_confidence_warning}\n\n{transcript}"
+
+                    summary_status = "ok"
+                    summary_error = ""
+
+                    try:
+                        summary = summarize(
+                            title=video_title,
+                            transcript=summary_input,
+                            transcript_source=transcript_source,
+                            media_source=media_source,
+                            summary_language=self.summary_language,
+                            stop_flag=self.control_flag,
+                        )
+                        summary = clean_summary(summary, summary_language=self.summary_language)
+                        self.dbg("SUMMARY DONE")
+                    except Exception as summary_exc:
+                        if self.is_stopped():
+                            raise
+                        summary_error = str(summary_exc)
+                        lower_error = summary_error.lower()
+                        if "timed out" in lower_error or "read timeout" in lower_error or "timeout" in lower_error:
+                            summary_status = "fallback_timeout"
+                        else:
+                            summary_status = "fallback_error"
+                        self.had_error = True
+                        fallback_tasks.append((task_index, task_ref, summary_status, summary_error))
+                        self.dbg(f"SUMMARY FAILED, USE FALLBACK: {summary_status} :: {summary_error}")
+                        summary = build_fallback_summary(
+                            title=video_title,
+                            transcript=transcript,
+                            summary_error=summary_error,
+                            summary_language=self.summary_language,
+                            transcript_source=transcript_source,
+                            media_source=media_source,
+                        )
+                        summary = clean_summary(summary, summary_language=self.summary_language)
+
+                    metadata = {
+                        "title": video_title,
+                        "video_id": video_id,
+                        "media_source": media_source,
+                        "media_ref": media_ref,
+                        "transcript_source": transcript_source,
+                        "subtitle_source": subtitle_source,
+                        "summary_language": self.summary_language,
+                        "is_music_like": is_music_like,
+                        "generated_at": datetime.now().isoformat(timespec="seconds"),
+                        "transcript_status": "ok" if transcript.strip() else "empty",
+                        "summary_status": summary_status,
+                        "summary_error": summary_error,
+                        "output_type": "full" if summary_status == "ok" else "fallback_summary",
+                        "ollama_model_zh": os.environ.get("OLLAMA_MODEL_ZH", ""),
+                        "ollama_model_en": os.environ.get("OLLAMA_MODEL_EN", ""),
+                        "ollama_timeout_sec": os.environ.get("OLLAMA_TIMEOUT_SEC", "300"),
+                    }
+
+                    final_text = self._build_final_text(
+                        video_title=video_title,
+                        media_source=media_source,
+                        media_ref=media_ref,
+                        transcript_source=transcript_source,
+                        transcript=transcript,
+                        summary=summary,
+                        low_confidence_warning=low_confidence_warning,
+                        summary_status=summary_status,
+                        summary_error=summary_error,
                     )
-                    transcript = clean_transcript(transcript, force_traditional=(self.summary_language == "zh"))
-                    transcript_source = self.s.source_whisper_music if is_music_like else self.s.source_whisper
-                    self.dbg(f"TRANSCRIBE DONE, SOURCE: {transcript_source}")
 
-                low_confidence_warning = ""
-                if is_music_like and not subtitle_text.strip() and looks_too_short(transcript):
-                    low_confidence_warning = self.s.low_confidence_note
-                    self.dbg("LOW CONFIDENCE WARNING TRIGGERED")
+                    saved_path = save_note(
+                        title=video_title,
+                        content=final_text,
+                        video_id=video_id,
+                        metadata=metadata,
+                        transcript=transcript,
+                        summary=summary,
+                    )
+                    self.dbg(f"SAVED TO: {saved_path}")
+                    final_text += f"\n[{self.s.saved_to}] {saved_path}\n"
 
-                if self.is_stopped():
-                    self.signals.status.emit(self.s.stopped)
-                    self.dbg("WORKER STOPPED BEFORE SUMMARY")
-                    self.signals.finished.emit(False)
-                    return
+                    self.signals.result.emit(final_text)
+                    success_count += 1
 
-                self.wait_if_paused(self.s.paused)
+                except Exception as task_exc:
+                    if self.is_stopped():
+                        self.signals.status.emit(self.s.stopped)
+                        self.dbg("WORKER STOPPED DURING TASK")
+                        self.signals.finished.emit(False)
+                        return
+                    failed_tasks.append((task_index, task_ref, str(task_exc)))
+                    self._emit_task_failure(task_index, total, task_ref, task_exc)
+                    continue
 
-                self.signals.progress.emit(85)
-                self.signals.status.emit(f"[{i+1}/{total}] {self.s.summarizing}")
-                self.dbg("CALL summarize()")
+            summary_lines = [
+                "=== Batch Summary ===",
+                f"Total: {total}",
+                f"Success: {success_count}",
+                f"Failed: {len(failed_tasks)}",
+                f"Fallback summaries: {len(fallback_tasks)}",
+            ]
 
-                summary_input = transcript
-                if low_confidence_warning:
-                    summary_input = f"{low_confidence_warning}\n\n{transcript}"
+            if fallback_tasks:
+                summary_lines.append("Fallback summary tasks:")
+                for idx, ref, status, err in fallback_tasks:
+                    summary_lines.append(f"- [{idx}/{total}] {ref}: {status} - {err}")
 
-                summary = summarize(
-                    title=video_title,
-                    transcript=summary_input,
-                    transcript_source=transcript_source,
-                    media_source=media_source,
-                    summary_language=self.summary_language,
-                    stop_flag=self.control_flag,
-                )
-                summary = clean_summary(summary, summary_language=self.summary_language)
-                self.dbg("SUMMARY DONE")
+            if failed_tasks:
+                summary_lines.append("Failed tasks:")
+                for idx, ref, err in failed_tasks:
+                    summary_lines.append(f"- [{idx}/{total}] {ref}: {err}")
 
-                metadata = {
-                    "title": video_title,
-                    "video_id": video_id,
-                    "media_source": media_source,
-                    "media_ref": media_ref,
-                    "transcript_source": transcript_source,
-                    "subtitle_source": subtitle_source,
-                    "summary_language": self.summary_language,
-                    "is_music_like": is_music_like,
-                    "generated_at": datetime.now().isoformat(timespec="seconds"),
-                }
-
-                final_text = (
-                    f"=== {video_title} ===\n\n"
-                    f"[{self.s.media_source}] {media_source}\n"
-                    f"[{self.s.video_url}] {media_ref}\n"
-                    f"[{self.s.transcript_source}] {transcript_source}\n"
-                )
-
-                if low_confidence_warning:
-                    final_text += f"[Warning] {to_traditional_chinese(low_confidence_warning)}\n"
-
-                final_text += (
-                    f"\n[{self.s.transcript}]\n"
-                    f"{transcript}\n\n"
-                    f"[{self.s.summary}]\n"
-                    f"{summary}\n"
-                )
-
-                saved_path = save_note(
-                    title=video_title,
-                    content=final_text,
-                    video_id=video_id,
-                    metadata=metadata,
-                    transcript=transcript,
-                    summary=summary,
-                )
-                self.dbg(f"SAVED TO: {saved_path}")
-                final_text += f"\n[{self.s.saved_to}] {saved_path}\n"
-
-                self.signals.result.emit(final_text)
+            self.signals.result.emit("\n".join(summary_lines) + "\n")
 
             self.signals.progress.emit(100)
-            self.signals.status.emit(self.s.done)
-            self.dbg("WORKER FINISHED SUCCESS")
-            self.signals.finished.emit(True)
+            if failed_tasks or fallback_tasks:
+                self.signals.status.emit(self.s.done_with_error)
+                self.dbg(f"WORKER FINISHED WITH TASK ERRORS success={success_count} failed={len(failed_tasks)} fallback={len(fallback_tasks)}")
+                self.signals.finished.emit(False)
+            else:
+                self.signals.status.emit(self.s.done)
+                self.dbg("WORKER FINISHED SUCCESS")
+                self.signals.finished.emit(True)
 
         except Exception as e:
             self.had_error = True
